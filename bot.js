@@ -158,12 +158,21 @@ async function monitorMC(mint, name, entryMC) {
   stats.total++;
   stats.entryMCs.push(entryMC);
   let peak = entryMC;
+  await sendTelegram('📊 SUIVI OUVERT\n==================\n🪙 ' + name + '\nEntree MC : $' + entryMC.toLocaleString() + '\nObjectif : $8,000\nStop Loss : $1,500\n==================\nSurveillance toutes les 15 sec...');
 
   const interval = setInterval(async () => {
     try {
       const { mc } = await getTokenInfo(mint);
       if (!mc) return;
       if (mc > peak) peak = mc;
+      const pct = Math.round((mc/entryMC-1)*100);
+      const status = mc > entryMC ? '+' + pct + '%' : pct + '%';
+      console.log(name + ' | MC actuel : $' + mc.toLocaleString() + ' | ' + status);
+
+      if (Date.now() % 300000 < 15000) {
+        const pct2 = Math.round((mc/entryMC-1)*100);
+        await sendTelegram('⏱ SUIVI ' + name + '\n==================\nMC actuel : $' + mc.toLocaleString() + '\nVariation : ' + (pct2 > 0 ? '+' : '') + pct2 + '%\nPic : $' + peak.toLocaleString() + '\nObjectif : $8,000\n==================');
+      }
 
       if (mc >= 8000) {
         stats.reached8k++;
