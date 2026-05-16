@@ -1,4 +1,4 @@
-﻿require('dotenv').config();
+﻿if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
@@ -11,10 +11,22 @@ const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=' + p
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const TARGETS = (process.env.TARGET_WALLET || '').split(',');
 const SOL = 'So11111111111111111111111111111111111111112';
-const MAX_MC = 100000;
+const MAX_MC = 2500;
+const TARGET_MC = 8000;
 const MIN_LIQUIDITY = 5000;
 const processed = new Set();
 const positions = {};
+let availableSOL = 5000000;
+
+const stats = {
+  total: 0,
+  reached8k: 0,
+  reached5k: 0,
+  reached3k: 0,
+  rugged: 0,
+  entryMCs: [],
+  exitMCs: []
+};
 
 async function sendTelegram(msg) {
   try {
@@ -88,7 +100,7 @@ async function handleWallet(TARGET_WALLET) {
 
       for (let i = 1; i <= 3; i++) {
         try {
-          const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=5000000&slippageBps=150');
+          const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + availableSOL + '&slippageBps=150');
           const q = await qr.json();
           if (!q.outAmount) { status = '[ECHOUE] Token non listable sur Jupiter'; continue; }
           const sr = await fetch('https://api.jup.ag/swap/v1/swap', {
@@ -103,6 +115,9 @@ async function handleWallet(TARGET_WALLET) {
           vtx.sign([myWallet]);
           sig = await connection.sendRawTransaction(vtx.serialize(), {skipPreflight: true, maxRetries: 3});
           status = '✅ ACHAT REUSSI';
+availableSOL = Math.floor(availableSOL * 1.1);
+console.log('Capital disponible : ' + availableSOL + ' lamports');
+monitorMC(mint, name, mc);
           const key = mint.slice(0,8);
           positions[key] = { entry: price, name, mint };
           break;
@@ -139,6 +154,54 @@ async function handleWallet(TARGET_WALLET) {
   }, 'confirmed');
 }
 
+async function monitorMC(mint, name, entryMC) {
+  stats.total++;
+  stats.entryMCs.push(entryMC);
+  let peak = entryMC;
+
+  const interval = setInterval(async () => {
+    try {
+      const { mc } = await getTokenInfo(mint);
+      if (!mc) return;
+      if (mc > peak) peak = mc;
+
+      if (mc >= 8000) {
+        stats.reached8k++;
+        stats.exitMCs.push(mc);
+        await sendTelegram('🟢 OBJECTIF ATTEINT\n==================\n🪙 ' + name + '\nEntree : $' + entryMC.toLocaleString() + '\nSortie : $' + mc.toLocaleString() + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n==================');
+        clearInterval(interval);
+        if (stats.total % 10 === 0) sendReport();
+      } else if (mc >= 5000) {
+        stats.reached5k++;
+      } else if (mc >= 3000) {
+        stats.reached3k++;
+      } else if (mc <= entryMC * 0.5) {
+        stats.rugged++;
+        stats.exitMCs.push(mc);
+        await sendTelegram('🔴 RUG\n==================\n🪙 ' + name + '\nEntree : $' + entryMC.toLocaleString() + '\nPic : $' + peak.toLocaleString() + '\nPerte : ' + Math.round((mc/entryMC-1)*100) + '%\n==================');
+        clearInterval(interval);
+        if (stats.total % 10 === 0) sendReport();
+      }
+    } catch(e) {}
+  }, 15000);
+}
+
+async function sendReport() {
+  const winRate = Math.round((stats.reached8k / stats.total) * 100);
+  const msg = '📊 RAPPORT ' + stats.total + ' TOKENS\n'
+    + '==================\n'
+    + '✅ Objectif $8k atteint : ' + stats.reached8k + ' (' + winRate + '%)\n'
+    + '🟡 Atteint $5k : ' + stats.reached5k + '\n'
+    + '🟠 Atteint $3k : ' + stats.reached3k + '\n'
+    + '🔴 Ruggés : ' + stats.rugged + '\n'
+    + '==================\n'
+    + 'Meilleure entree : $' + Math.min(...stats.entryMCs).toLocaleString() + '\n'
+    + 'Strategie win rate : ' + winRate + '%\n'
+    + '==================';
+  await sendTelegram(msg);
+}
+
 console.log('Bot PRO demarre');
 TARGETS.forEach(w => handleWallet(w.trim()));
-sendTelegram('GHOSTCOPY BOT DEMARRE\n==================\nWallets surveilles : ' + TARGETS.length + '\n==================');
+sendTelegram('GHOSTCOPY BOT DEMARRE\n==================\nWallets surveilles : ' + TARGETS.length + '\n==================');require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') require('dotenv').config();
