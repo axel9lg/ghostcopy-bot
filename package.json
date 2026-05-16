@@ -1,0 +1,26 @@
+{
+  "name": "ghostcopy-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "bot.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axel9lg/ghostcopy-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/axel9lg/ghostcopy-bot/issues"
+  },
+  "homepage": "https://github.com/axel9lg/ghostcopy-bot#readme",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "dotenv": "^17.4.2"
+  }
+}
