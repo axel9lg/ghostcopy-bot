@@ -91,7 +91,7 @@ async function handleWallet(TARGET_WALLET) {
       const rugScore = rugRisks.length === 0 ? '🟢 SAFE' : rugRisks.length === 1 ? '🟡 RISQUE ' + rugRisks.join(', ') : '🔴 DANGER ' + rugRisks.join(', ');
 
       if (mc > MAX_MC && mc > 0) {
-        await sendTelegram('[IGNORE] ' + name + ' - MC trop eleve $' + mc.toLocaleString());
+        await sendTelegram('🚫 IGNORE ' + name + ' - MC trop eleve $' + mc.toLocaleString());
         return;
       }
 
@@ -102,14 +102,14 @@ async function handleWallet(TARGET_WALLET) {
         try {
           const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + availableSOL + '&slippageBps=150');
           const q = await qr.json();
-          if (!q.outAmount) { status = '[ECHOUE] Token non listable sur Jupiter'; continue; }
+          if (!q.outAmount) { status = '❌ ECHOUE Token non listable sur Jupiter'; continue; }
           const sr = await fetch('https://api.jup.ag/swap/v1/swap', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ quoteResponse: q, userPublicKey: myWallet.publicKey.toString(), wrapAndUnwrapSol: true })
           });
           const sd = await sr.json();
-          if (!sd.swapTransaction) { status = '[ECHOUE] Swap indisponible'; continue; }
+          if (!sd.swapTransaction) { status = '❌ ECHOUE Swap indisponible'; continue; }
           const buf = Buffer.from(sd.swapTransaction, 'base64');
           const vtx = VersionedTransaction.deserialize(buf);
           vtx.sign([myWallet]);
@@ -122,7 +122,7 @@ monitorMC(mint, name, mc);
           positions[key] = { entry: price, name, mint };
           break;
         } catch(e) {
-          status = '[ERREUR] ' + e.message.slice(0,50);
+          status = '⚠️ ERREUR ' + e.message.slice(0,50);
         }
       }
 
@@ -132,17 +132,17 @@ monitorMC(mint, name, mc);
         + '📊 MC : $' + (mc ? mc.toLocaleString() : 'inconnu') + '\n'
         + '💵 PRIX : $' + price + '\n'
         + '💧 LIQUIDITE : $' + liquidity.toLocaleString() + '\n'
-        + '📈  VOLUME 24H : $' + volume.toLocaleString() + '\n'
-        + ' 🔄 TXS 24H : ' + txns + '\n'
-        + 'AGE : ' + age + '\n\n'
+        + '📈 VOLUME 24H : $' + volume.toLocaleString() + '\n'
+        + '🔄 TXS 24H : ' + txns + '\n'
+        + '⏰ AGE : ' + age + '\n\n'
         + rugScore + '\n\n'
         + '==================\n'
         + '👛 WALLET : ' + shortWallet + '\n'
         + '💰 MISE : 0.005 SOL\n\n'
         + status + '\n'
         + '==================\n'
-        + (sig ? 'TX : https://solscan.io/tx/' + sig + '\n' : '')
-        + 'CHART : https://dexscreener.com/solana/' + mint + '\n\n'
+        + (sig ? '🔗 TX : https://solscan.io/tx/' + sig + '\n' : '')
+        + '📊 CHART : https://dexscreener.com/solana/' + mint + '\n\n'
         + '🎯 TP : +100% | 🛑 SL : -30%\n'
         + '==================';
 
@@ -212,5 +212,5 @@ async function sendReport() {
 
 console.log('Bot PRO demarre');
 TARGETS.forEach(w => handleWallet(w.trim()));
-sendTelegram('GHOSTCOPY BOT DEMARRE\n==================\nWallets surveilles : ' + TARGETS.length + '\n==================');require('dotenv').config();
+sendTelegram('🚀 GHOSTCOPY BOT DEMARRE\n==================\nWallets surveilles : ' + TARGETS.length + '\n==================');require('dotenv').config();
 if (process.env.NODE_ENV !== 'production') require('dotenv').config();
