@@ -12,21 +12,22 @@ const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_K
 const SOL = 'So11111111111111111111111111111111111111112';
 const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
-// CONFIG — strategie MOMENTUM RAPIDE
+// CONFIG
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const ENTRY_MC = 5000;            // achat des que le token atteint $5,000 MC
-const ENTRY_WINDOW_MIN = 10;      // token doit atteindre $5k en moins de 10 min
-const ENTRY_WINDOW_CHECKS = 120;  // 10 min = 120 checks x 5s
-const TP_PCT = 100;               // TP +100% → $10,000 MC → +$200
-const SL_PCT = 30;                // SL -30% → $3,500 MC → -$60
-const TRAILING_ACTIVATE_PCT = 50; // trailing actif apres +50%
+const TP_PCT = 50;                // +50% = +$100 de benefice
+const SL_PCT = 25;                // -25% = -$50
+const MIN_ENTRY_MC = 2000;        // entrer a partir de $2,000 MC (tres tot)
+const MAX_ENTRY_MC = 8000;        // refuser si MC > $8,000 (trop tard)
+const MIN_LIQUIDITY = 500;        // liquidite minimum pour que le swap marche
+const TRAILING_ACTIVATE_PCT = 30; // trailing actif apres +30%
 const TRAILING_PCT = 15;          // trail -15% depuis pic
 const JITO_FEE = 500000;          // 0.0005 SOL priority fee
 const MONITOR_INTERVAL = 5000;   // check toutes les 5 sec
 const MAX_OPEN = 3;               // max 3 positions ouvertes
-const TIMEOUT_CHECKS = 120;      // 10 min apres achat (120 x 5s)
-const MAX_WATCH = 200;            // max 200 tokens surveilles en meme temps
+const TIMEOUT_CHECKS = 60;        // 5 min max apres achat
+const VALIDATION_CHECKS = 12;     // 60s max pour valider le token (12 x 5s)
+const MAX_WATCH = 200;
 
 const sniped = new Set();
 const positions = {};
@@ -36,6 +37,7 @@ const stats = {
   total: 0,
   wins: 0,
   losses: 0,
+  skipped: 0,
   bestGainPct: 0,
   bestToken: '',
   fastestWinMs: Infinity,
@@ -130,6 +132,7 @@ async function sendSniperReport() {
     + '🏆 Wins (TP) : ' + stats.wins + '\n'
     + '🔴 Losses (SL) : ' + stats.losses + '\n'
     + '📊 Win rate : ' + winRate + '%\n'
+    + '🚫 Ignores (trop tard/no data) : ' + stats.skipped + '\n'
     + '==================\n'
     + '💰 Mise par trade : $' + MISE_USD + '\n'
     + '📈 Gains bruts : +$' + gainBrut.toFixed(0) + '\n'
@@ -161,7 +164,7 @@ async function monitorSnipe(mint, name, buyTime) {
           stats.losses++;
           delete positions[mint];
           await sendTelegram(
-            '🔴 SNIPE ABANDONNE\n==================\n🪙 ' + name + '\nNon indexe apres 1 min\n==================\nPERTE ESTIMEE : -$' + (MISE_USD * SL_PCT / 100)
+            '🔴 ABANDON\n==================\n🪙 ' + name + '\nNon indexe apres 1 min\n==================\nPERTE ESTIMEE : -$' + (MISE_USD * SL_PCT / 100)
           );
           if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         }
@@ -187,12 +190,12 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🔄 TRAILING STOP — VENTE AUTO\n==================\n🪙 ' + name + '\n'
+          '🔄 TRAILING STOP\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
           + '📈 Pic : $' + peak.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
           + (gainPct >= 0 ? '💰 Gain' : '📉 Perte') + ' : ' + (gainPct >= 0 ? '+' : '') + gainPct + '% (' + (gainPct >= 0 ? '+$' : '-$') + Math.abs(parseInt(gainUSD)) + ')\n'
-          + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
         if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
@@ -210,7 +213,7 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🏆 TP ATTEINT — VENTE AUTO\n==================\n🪙 ' + name + '\n'
+          '🏆 TP ATTEINT\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n'
           + '📈 Pic : $' + peak.toLocaleString() + ' MC\n==================\n'
@@ -233,20 +236,19 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🔴 STOP LOSS — VENTE AUTO\n==================\n🪙 ' + name + '\n'
+          '🔴 STOP LOSS\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
           + '📉 Perte : ' + gainPct + '% (-$' + perteUSD + ')\n'
           + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
-          + 'PERTE NETTE : -$' + perteUSD + '\n==================\n'
-          + '📊 https://dexscreener.com/solana/' + mint + '\n'
+          + 'PERTE NETTE : -$' + perteUSD + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
         if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         return;
       }
 
-      // TIMEOUT 10 min
+      // TIMEOUT 5 min
       if (checks >= TIMEOUT_CHECKS) {
         clearInterval(interval);
         const gainUSD = ((gainPct / 100) * MISE_USD).toFixed(0);
@@ -254,28 +256,30 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '⏱ TIMEOUT 10 MIN — VENTE AUTO\n==================\n🪙 ' + name + '\n'
-          + (gainPct >= 0 ? '💰 Gain' : '📉 Perte') + ' : ' + (gainPct >= 0 ? '+' : '') + gainPct + '%\n==================\n'
+          '⏱ TIMEOUT 5 MIN\n==================\n🪙 ' + name + '\n'
+          + (gainPct >= 0 ? '💰 Gain' : '📉 Perte') + ' : ' + (gainPct >= 0 ? '+' : '') + gainPct + '% (' + (gainPct >= 0 ? '+$' : '-$') + Math.abs(parseInt(gainUSD)) + ')\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
+        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
       }
     } catch(e) {}
   }, MONITOR_INTERVAL);
 }
 
-async function snipe(mint, tokenName, entryMCDetected) {
+async function snipe(mint, name, entryMC) {
   if (positions[mint]) return;
   if (Object.keys(positions).length >= MAX_OPEN) return;
   positions[mint] = { status: 'buying' };
 
   for (let i = 1; i <= 3; i++) {
     try {
-      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + MISE_LAMPORTS + '&slippageBps=1000');
+      // 2000 bps (20%) de slippage car on achete tres tot = gros impact prix
+      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + MISE_LAMPORTS + '&slippageBps=2000');
       const q = await qr.json();
       if (!q.outAmount) {
         if (i === 3) {
           delete positions[mint];
-          await sendTelegram('❌ SNIPE ECHOUE\n🪙 ' + tokenName + '\nNon swappable sur Jupiter');
+          await sendTelegram('❌ ECHEC\n🪙 ' + name + '\nNon swappable sur Jupiter (trop recent)');
         }
         await new Promise(r => setTimeout(r, 2000));
         continue;
@@ -304,13 +308,13 @@ async function snipe(mint, tokenName, entryMCDetected) {
       stats.total++;
       sniped.add(mint);
 
-      const tpMC = Math.round(entryMCDetected * (1 + TP_PCT / 100));
-      const slMC = Math.round(entryMCDetected * (1 - SL_PCT / 100));
+      const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+      const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
       await sendTelegram(
-        '🚀 MOMENTUM SNIPE\n==================\n'
-        + '🪙 ' + tokenName + '\n'
-        + '⚡ $' + ENTRY_MC.toLocaleString() + ' MC atteint en < ' + ENTRY_WINDOW_MIN + ' min\n==================\n'
+        '🎯 SNIPE EXECUTE\n==================\n'
+        + '🪙 ' + name + '\n'
+        + '📊 MC entree : $' + entryMC.toLocaleString() + ' (tres tot)\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
         + '🎯 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '%) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
         + '🛑 SL : $' + slMC.toLocaleString() + ' MC (-' + SL_PCT + '%) → -$' + (MISE_USD * SL_PCT / 100) + '\n'
@@ -320,7 +324,7 @@ async function snipe(mint, tokenName, entryMCDetected) {
         + '📊 https://dexscreener.com/solana/' + mint
       );
 
-      monitorSnipe(mint, tokenName, buyTime);
+      monitorSnipe(mint, name, buyTime);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
@@ -330,10 +334,9 @@ async function snipe(mint, tokenName, entryMCDetected) {
   }
 }
 
-async function watchToken(mint) {
+async function validateAndSnipe(mint) {
   if (watched[mint] || sniped.has(mint)) return;
   if (Object.keys(watched).length >= MAX_WATCH) return;
-
   watched[mint] = { checks: 0, name: mint.slice(0, 8) };
 
   const interval = setInterval(async () => {
@@ -342,32 +345,46 @@ async function watchToken(mint) {
       const w = watched[mint];
       w.checks++;
 
-      // Abandon apres 10 min sans atteindre $5k (pas de momentum)
-      if (w.checks >= ENTRY_WINDOW_CHECKS) {
+      // Abandon apres 60 secondes sans donnees ou signal
+      if (w.checks >= VALIDATION_CHECKS) {
         clearInterval(interval);
         delete watched[mint];
+        stats.skipped++;
         return;
       }
 
-      const { mc, name } = await getTokenInfo(mint);
+      const { mc, name, liquidity } = await getTokenInfo(mint);
       if (name && name !== mint.slice(0, 8)) w.name = name;
+
+      // Pas encore indexe — on reessaie
       if (!mc) return;
 
-      // Signal : le token atteint $5,000 MC en moins de 10 min
-      if (mc >= ENTRY_MC) {
+      // MC trop eleve — token deja pompe, trop tard
+      if (mc > MAX_ENTRY_MC) {
+        clearInterval(interval);
+        delete watched[mint];
+        stats.skipped++;
+        console.log('[SKIP] ' + w.name + ' MC trop haut: $' + mc.toLocaleString());
+        return;
+      }
+
+      // MC dans la zone ET liquidite suffisante — on achete
+      if (mc >= MIN_ENTRY_MC && liquidity >= MIN_LIQUIDITY) {
         clearInterval(interval);
         const tokenName = w.name;
-        const minutesElapsed = Math.round((w.checks * MONITOR_INTERVAL) / 60000);
         delete watched[mint];
 
         if (Object.keys(positions).length >= MAX_OPEN) {
-          console.log('[WATCH] ' + tokenName + ' — $5k atteint mais max positions');
+          stats.skipped++;
           return;
         }
 
-        console.log('[SNIPER] MOMENTUM : ' + tokenName + ' | $' + mc.toLocaleString() + ' MC en ' + minutesElapsed + ' min');
+        console.log('[SNIPER] Entree: ' + tokenName + ' | $' + mc.toLocaleString() + ' MC | Liquidite: $' + liquidity.toLocaleString());
         await snipe(mint, tokenName, mc);
       }
+
+      // MC trop bas (< $2k) — pas assez de liquidite initiale, on attend encore
+
     } catch(e) {}
   }, MONITOR_INTERVAL);
 }
@@ -405,22 +422,24 @@ async function startSniper() {
       const mint = findNewMint(tx);
       if (!mint) return;
 
-      await watchToken(mint);
+      await validateAndSnipe(mint);
     } catch(e) {
       console.log('[SNIPER] Erreur : ' + e.message);
     }
   }, 'confirmed');
 
-  console.log('Sniper MOMENTUM actif — achat a $' + ENTRY_MC.toLocaleString() + ' MC en < ' + ENTRY_WINDOW_MIN + ' min');
+  console.log('Sniper actif — entree $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
-    '🚀 SNIPER MOMENTUM DEMARRE\n==================\n'
-    + '📡 Surveillance : tous les nouveaux tokens Pump.fun\n'
-    + '⚡ Signal : $' + ENTRY_MC.toLocaleString() + ' MC atteint en < ' + ENTRY_WINDOW_MIN + ' min\n==================\n'
+    '🎯 SNIPER PUMP.FUN DEMARRE\n==================\n'
+    + '⚡ Achat : tous les nouveaux tokens a la creation\n'
+    + '📊 Zone entree : $' + MIN_ENTRY_MC.toLocaleString() + ' — $' + MAX_ENTRY_MC.toLocaleString() + ' MC\n'
+    + '✅ Filtre : liquidite > $' + MIN_LIQUIDITY + '\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
     + '🎯 TP : +' + TP_PCT + '% → +$' + (MISE_USD * TP_PCT / 100) + '\n'
     + '🛑 SL : -' + SL_PCT + '% → -$' + (MISE_USD * SL_PCT / 100) + '\n'
-    + '🔄 Trailing : -' + TRAILING_PCT + '% du pic (actif a +' + TRAILING_ACTIVATE_PCT + '%)\n'
+    + '🔄 Trailing : -' + TRAILING_PCT + '% (actif a +' + TRAILING_ACTIVATE_PCT + '%)\n'
     + '🔢 Max positions : ' + MAX_OPEN + '\n'
+    + '📊 Rapports a 10, 20, 30 snipes\n'
     + '=================='
   );
 }
