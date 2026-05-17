@@ -11,9 +11,10 @@ const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=' + p
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const TARGETS = (process.env.TARGET_WALLET || '').split(',');
 const SOL = 'So11111111111111111111111111111111111111112';
-const ENTRY_MC = 2500;
+const ENTRY_MC = 3000;
 const STOP_LOSS_MC = 2400;
-const TARGET_MC = 5000;
+const TARGET_MC = 6000;
+const MISE_USD = 20;
 const MIN_LIQUIDITY = 5000;
 const processed = new Set();
 const positions = {};
@@ -91,7 +92,7 @@ async function getTokenInfo(mint) {
 
 async function waitForEntry(mint, name, targetEntryMC) {
   console.log('En attente MC $' + targetEntryMC + ' pour ' + name);
-  await sendTelegram('⏳ ATTENTE ENTREE\n==================\n🪙 TOKEN : ' + name + '\nMC actuel : en surveillance\nOn attend : $' + targetEntryMC + '\n==================');
+  await sendTelegram('⏳ SNIPE EN ATTENTE\n==================\n🪙 ' + name + '\nMC trop haut pour entrer\nOn surveille : $' + targetEntryMC.toLocaleString() + ' MC\n==================\nVerification toutes les 5 sec...');
 
   const interval = setInterval(async () => {
     try {
@@ -100,7 +101,7 @@ async function waitForEntry(mint, name, targetEntryMC) {
 
       if (mc <= targetEntryMC) {
         console.log('ENTREE DETECTEE : ' + name + ' a $' + mc);
-        await sendTelegram('🎯 ENTREE DETECTEE\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nACHAT EN COURS...\n==================');
+        await sendTelegram('🎯 ENTREE DETECTEE\n==================\n🪙 ' + name + '\n📊 MC : $' + mc.toLocaleString() + '\n💵 PRIX : $' + price + '\n==================\n⚡ ACHAT EN COURS...');
         clearInterval(interval);
         await executeBuy(mint, name, mc, price);
       }
@@ -131,7 +132,7 @@ async function executeBuy(mint, name, entryMC, entryPrice) {
       const vtx = VersionedTransaction.deserialize(buf);
       vtx.sign([myWallet]);
       const sig = await connection.sendRawTransaction(vtx.serialize(), {skipPreflight: true, maxRetries: 3});
-      await sendTelegram('✅ ACHAT REUSSI\n==================\n🪙 TOKEN : ' + name + '\nMC entree : $' + entryMC.toLocaleString() + '\nPRIX : $' + entryPrice + '\nSTOP LOSS : $2,400 MC\nOBJECTIF : $5,000 MC\n==================\n🔗 TX : https://solscan.io/tx/' + sig);
+      await sendTelegram('✅ ACHAT EXECUTE\n==================\n🪙 ' + name + '\n💰 MISE : $' + MISE_USD + '\n==================\n📊 MC ENTREE : $' + entryMC.toLocaleString() + '\n💵 PRIX : $' + entryPrice + '\n==================\n🎯 OBJECTIF : $6,000 MC\n   Mise x2 → +$' + MISE_USD + ' profit\n🛑 STOP LOSS : $2,400 MC\n   Perte max → -$' + (MISE_USD * 0.24).toFixed(2) + '\n==================\n🔗 https://solscan.io/tx/' + sig);
       monitorMC(mint, name, entryMC);
       break;
     } catch(e) {
@@ -209,26 +210,31 @@ monitorMC(mint, name, mc);
         }
       }
 
-      const msg = '⚡ GHOSTCOPY ALERT ⚡\n'
-        + '==================\n\n'
-        + '🪙 TOKEN : ' + name + '\n'
+      const entryStatus = mc <= ENTRY_MC ? '✅ ENTREE $3K POSSIBLE' : '⏳ MC A $' + mc.toLocaleString() + ' — SURVEILLANCE $3K';
+      const snipeNote = ageMinutes > 0 ? '💡 Lance il y a ' + ageMinutes + ' min — snipe ideal au lancement' : '';
+
+      const msg = '⚡ GHOSTCOPY SIGNAL ⚡\n'
+        + '==================\n'
+        + '🪙 ' + name + '\n'
+        + '==================\n'
         + '📊 MC : $' + (mc ? mc.toLocaleString() : 'inconnu') + '\n'
         + '💵 PRIX : $' + price + '\n'
+        + '⏰ AGE : ' + age + '\n'
         + '💧 LIQUIDITE : $' + liquidity.toLocaleString() + '\n'
         + '📈 VOLUME 24H : $' + volume.toLocaleString() + '\n'
         + '🔄 TXS 24H : ' + txns + '\n'
-        + '⏰ AGE : ' + age + '\n\n'
-        + rugScore + '\n'
-        + scoreEmoji + ' SCORE : ' + score + '/10\n\n'
         + '==================\n'
-        + '👛 WALLET : ' + shortWallet + '\n'
-        + '💰 MISE : 0.005 SOL\n\n'
+        + scoreEmoji + ' SCORE : ' + score + '/10\n'
+        + rugScore + '\n'
+        + '==================\n'
+        + '👛 COPIE : ' + shortWallet + '\n'
+        + entryStatus + '\n'
+        + snipeNote + '\n'
+        + '==================\n'
         + status + '\n'
         + '==================\n'
         + (sig ? '🔗 TX : https://solscan.io/tx/' + sig + '\n' : '')
-        + '📊 CHART : https://dexscreener.com/solana/' + mint + '\n\n'
-        + '🎯 TP : +100% | 🛑 SL : -30%\n'
-        + '==================';
+        + '📊 https://dexscreener.com/solana/' + mint;
 
       console.log(msg);
       await sendTelegram(msg);
@@ -247,39 +253,39 @@ async function monitorMC(mint, name, entryMC) {
   let sold25 = false;
   const startTime = Date.now();
 
-  await sendTelegram('📊 POSITION OUVERTE\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\n\n🎯 TP1 : $4,800 MC → vendre 40%\n🎯 TP2 : $6,000 MC → vendre 35%\n🎯 TP3 : $7,000 MC → vendre 25%\n🛑 SL : $2,400 MC\n==================');
+  await sendTelegram('📊 POSITION OUVERTE\n==================\n🪙 ' + name + '\n💰 Mise : $' + MISE_USD + '\n📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n🎯 TP : $6,000 MC\n   → Gain attendu : +$' + MISE_USD + ' (+100%)\n🛑 SL : $2,400 MC\n   → Perte max : -$' + (MISE_USD * 0.24).toFixed(2) + ' (-24%)\n==================\nSuivi toutes les 15 sec...');
 
   const interval = setInterval(async () => {
     try {
       const { mc, price } = await getTokenInfo(mint);
       if (!mc) return;
       if (mc > peak) peak = mc;
-      const duree = Math.round((Date.now() - startTime) / 60000);
+      const duree = Math.round((Date.now() - startTime) / 60000) || 1;
+      const vitesse = Math.round((mc - entryMC) / duree);
 
-      if (!sold40 && mc >= 4800) {
-        sold40 = true;
-        stats.reached5k++;
-        await sendTelegram('🟡 TP1 ATTEINT - VENDRE 40%\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n\nVendre 40% maintenant\nGarder 60% pour TP2 et TP3\n==================\n📉 https://dexscreener.com/solana/' + mint);
-      }
-
-      if (!sold35 && mc >= 6000) {
-        sold35 = true;
+      if (mc >= TARGET_MC) {
         stats.reached8k++;
-        await sendTelegram('🟠 TP2 ATTEINT - VENDRE 35%\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n\nVendre 35% maintenant\nGarder 25% pour TP3\n==================\n📉 https://dexscreener.com/solana/' + mint);
-      }
-
-      if (!sold25 && mc >= 7000) {
-        sold25 = true;
-        const gainPct = Math.round((mc/entryMC-1)*100);
-        await sendTelegram('🏆 TP3 ATTEINT - VENDRE TOUT\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nGain total : +' + gainPct + '%\nDuree : ' + duree + ' min\n==================\n STRATEGIE COMPLETE');
+        stats.exitMCs.push(mc);
+        const gainPct = Math.round((mc / entryMC - 1) * 100);
+        const gainUSD = ((gainPct / 100) * MISE_USD).toFixed(2);
+        const valeurFinale = (MISE_USD + parseFloat(gainUSD)).toFixed(2);
+        await sendTelegram(
+          '🏆 OBJECTIF ATTEINT — VENDRE TOUT\n==================\n🪙 ' + name + '\n💰 Mise initiale : $' + MISE_USD + '\n==================\n📊 MC entree : $' + entryMC.toLocaleString() + '\n📊 MC sortie : $' + mc.toLocaleString() + '\n📈 Pic atteint : $' + peak.toLocaleString() + '\n==================\n💰 Gain : +' + gainPct + '% (+$' + gainUSD + ')\n💵 Valeur finale : $' + valeurFinale + '\n⚡ Vitesse : +$' + vitesse.toLocaleString() + ' MC/min\n⏱ Duree : ' + duree + ' min\n==================\nBENEFICE NET : +$' + gainUSD + '\n==================\n📊 https://dexscreener.com/solana/' + mint
+        );
         clearInterval(interval);
         if (stats.total % 5 === 0) sendReport();
         return;
       }
 
-      if (mc <= 2400) {
-        const pertePct = Math.round((mc/entryMC-1)*100);
-        await sendTelegram('🔴 STOP LOSS DECLENCHE\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nPerte : ' + pertePct + '%\nDuree : ' + duree + ' min\n==================');
+      if (mc <= STOP_LOSS_MC) {
+        stats.rugged++;
+        stats.exitMCs.push(mc);
+        const pertePct = Math.round((mc / entryMC - 1) * 100);
+        const perteUSD = Math.abs((pertePct / 100) * MISE_USD).toFixed(2);
+        const vitesseChute = Math.round((entryMC - mc) / duree);
+        await sendTelegram(
+          '🔴 STOP LOSS DECLENCHE\n==================\n🪙 ' + name + '\n💰 Mise initiale : $' + MISE_USD + '\n==================\n📊 MC entree : $' + entryMC.toLocaleString() + '\n📊 MC sortie : $' + mc.toLocaleString() + '\n📈 Pic atteint : $' + peak.toLocaleString() + '\n==================\n📉 Perte : ' + pertePct + '% (-$' + perteUSD + ')\n⚡ Vitesse chute : -$' + vitesseChute.toLocaleString() + ' MC/min\n⏱ Duree : ' + duree + ' min\n==================\nPERTE NETTE : -$' + perteUSD + '\n==================\n📊 https://dexscreener.com/solana/' + mint
+        );
         clearInterval(interval);
         if (stats.total % 5 === 0) sendReport();
       }
@@ -289,16 +295,22 @@ async function monitorMC(mint, name, entryMC) {
 }
 
 async function sendReport() {
-  const winRate = Math.round((stats.reached8k / stats.total) * 100);
-  const msg = '📊 RAPPORT ' + stats.total + ' TOKENS\n'
+  const winRate = stats.total > 0 ? Math.round((stats.reached8k / stats.total) * 100) : 0;
+  const profitTotal = (stats.reached8k * MISE_USD).toFixed(2);
+  const perteTotal = (stats.rugged * MISE_USD * 0.24).toFixed(2);
+  const netUSD = (parseFloat(profitTotal) - parseFloat(perteTotal)).toFixed(2);
+  const netEmoji = parseFloat(netUSD) >= 0 ? '✅' : '🔴';
+  const msg = '📊 RAPPORT SESSION — ' + stats.total + ' TOKENS\n'
     + '==================\n'
-    + '✅ Objectif $8k atteint : ' + stats.reached8k + ' (' + winRate + '%)\n'
-    + '🟡 Atteint $5k : ' + stats.reached5k + '\n'
-    + '🟠 Atteint $3k : ' + stats.reached3k + '\n'
-    + '🔴 Ruggés : ' + stats.rugged + '\n'
+    + '🏆 TP $6k atteint : ' + stats.reached8k + ' (' + winRate + '%)\n'
+    + '🔴 Stop loss : ' + stats.rugged + '\n'
     + '==================\n'
-    + 'Meilleure entree : $' + Math.min(...stats.entryMCs).toLocaleString() + '\n'
-    + 'Strategie win rate : ' + winRate + '%\n'
+    + '💰 Mise par trade : $' + MISE_USD + '\n'
+    + '📈 Gains bruts : +$' + profitTotal + '\n'
+    + '📉 Pertes : -$' + perteTotal + '\n'
+    + netEmoji + ' NET : ' + (parseFloat(netUSD) >= 0 ? '+' : '') + '$' + netUSD + '\n'
+    + '==================\n'
+    + 'Win rate : ' + winRate + '%\n'
     + '==================';
   await sendTelegram(msg);
 }
