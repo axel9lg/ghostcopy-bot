@@ -15,11 +15,11 @@ const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 // CONFIG
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 50;                // +50% = +$100 de benefice
-const SL_PCT = 25;                // -25% = -$50
-const MIN_ENTRY_MC = 2000;        // entrer a partir de $2,000 MC (tres tot)
-const MAX_ENTRY_MC = 8000;        // refuser si MC > $8,000 (trop tard)
-const MIN_LIQUIDITY = 500;        // liquidite minimum pour que le swap marche
+const ENTRY_MC = 4000;            // achat a $4,000 MC
+const ENTRY_RANGE = 600;          // tolerance ±$600 (entre $3,400 et $4,600)
+const TP_MC = 6000;               // vente a $6,000 MC (+50% = +$100)
+const SL_PCT = 25;                // SL -25% = $3,000 MC = -$50
+const MIN_LIQUIDITY = 500;        // liquidite minimum
 const TRAILING_ACTIVATE_PCT = 30; // trailing actif apres +30%
 const TRAILING_PCT = 15;          // trail -15% depuis pic
 const JITO_FEE = 500000;          // 0.0005 SOL priority fee
@@ -202,22 +202,22 @@ async function monitorSnipe(mint, name, buyTime) {
         return;
       }
 
-      // TAKE PROFIT
-      if (gainPct >= TP_PCT) {
+      // TAKE PROFIT — vente a $6,000 MC
+      if (mc >= TP_MC) {
         clearInterval(interval);
-        const gainUSD = ((gainPct / 100) * MISE_USD).toFixed(0);
+        const gainPctFinal = Math.round((mc / entryMC - 1) * 100);
+        const gainUSD = ((gainPctFinal / 100) * MISE_USD).toFixed(0);
         const dureeMs = Date.now() - buyTime;
         if (dureeMs < stats.fastestWinMs) { stats.fastestWinMs = dureeMs; stats.fastestToken = name; }
-        if (gainPct > stats.bestGainPct) { stats.bestGainPct = gainPct; stats.bestToken = name; }
+        if (gainPctFinal > stats.bestGainPct) { stats.bestGainPct = gainPctFinal; stats.bestToken = name; }
         stats.wins++;
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🏆 TP ATTEINT\n==================\n🪙 ' + name + '\n'
+          '🏆 TP ATTEINT — $6,000 MC\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
-          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n'
-          + '📈 Pic : $' + peak.toLocaleString() + ' MC\n==================\n'
-          + '💰 Gain : +' + gainPct + '% (+$' + gainUSD + ')\n'
+          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
+          + '💰 Gain : +' + gainPctFinal + '% (+$' + gainUSD + ')\n'
           + '💵 Valeur finale : $' + (MISE_USD + parseInt(gainUSD)) + '\n'
           + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
           + 'BENEFICE NET : +$' + gainUSD + '\n==================\n'
@@ -311,12 +311,13 @@ async function snipe(mint, name, entryMC) {
       const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
       const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
+      const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
       await sendTelegram(
         '🎯 SNIPE EXECUTE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 MC entree : $' + entryMC.toLocaleString() + ' (tres tot)\n==================\n'
+        + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '🎯 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '%) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
+        + '🎯 TP : $' + TP_MC.toLocaleString() + ' MC → +$' + (MISE_USD * (TP_MC - entryMC) / entryMC).toFixed(0) + '\n'
         + '🛑 SL : $' + slMC.toLocaleString() + ' MC (-' + SL_PCT + '%) → -$' + (MISE_USD * SL_PCT / 100) + '\n'
         + '🔄 Trailing : -' + TRAILING_PCT + '% du pic (actif a +' + TRAILING_ACTIVATE_PCT + '%)\n'
         + '==================\n'
@@ -368,8 +369,17 @@ async function validateAndSnipe(mint) {
         return;
       }
 
-      // MC dans la zone ET liquidite suffisante — on achete
-      if (mc >= MIN_ENTRY_MC && liquidity >= MIN_LIQUIDITY) {
+      // MC trop eleve — token deja au dessus de notre zone d'entree
+      if (mc > ENTRY_MC + ENTRY_RANGE) {
+        clearInterval(interval);
+        delete watched[mint];
+        stats.skipped++;
+        console.log('[SKIP] ' + w.name + ' MC trop haut: $' + mc.toLocaleString() + ' (cible $' + ENTRY_MC + ')');
+        return;
+      }
+
+      // MC dans la zone d'entree ET liquidite ok — on achete
+      if (mc >= ENTRY_MC - ENTRY_RANGE && mc <= ENTRY_MC + ENTRY_RANGE && liquidity >= MIN_LIQUIDITY) {
         clearInterval(interval);
         const tokenName = w.name;
         delete watched[mint];
@@ -379,11 +389,9 @@ async function validateAndSnipe(mint) {
           return;
         }
 
-        console.log('[SNIPER] Entree: ' + tokenName + ' | $' + mc.toLocaleString() + ' MC | Liquidite: $' + liquidity.toLocaleString());
+        console.log('[SNIPER] Entree: ' + tokenName + ' | $' + mc.toLocaleString() + ' MC | Cible vente: $' + TP_MC.toLocaleString());
         await snipe(mint, tokenName, mc);
       }
-
-      // MC trop bas (< $2k) — pas assez de liquidite initiale, on attend encore
 
     } catch(e) {}
   }, MONITOR_INTERVAL);
@@ -428,15 +436,14 @@ async function startSniper() {
     }
   }, 'confirmed');
 
-  console.log('Sniper actif — entree $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
+  console.log('Sniper actif — achat $' + ENTRY_MC + ' MC / vente $' + TP_MC + ' MC');
   await sendTelegram(
     '🎯 SNIPER PUMP.FUN DEMARRE\n==================\n'
-    + '⚡ Achat : tous les nouveaux tokens a la creation\n'
-    + '📊 Zone entree : $' + MIN_ENTRY_MC.toLocaleString() + ' — $' + MAX_ENTRY_MC.toLocaleString() + ' MC\n'
-    + '✅ Filtre : liquidite > $' + MIN_LIQUIDITY + '\n==================\n'
+    + '⚡ Nouveaux tokens Pump.fun uniquement\n'
+    + '📊 Achat : $' + ENTRY_MC.toLocaleString() + ' MC (±$' + ENTRY_RANGE + ')\n'
+    + '🎯 Vente : $' + TP_MC.toLocaleString() + ' MC → +$' + (MISE_USD * (TP_MC - ENTRY_MC) / ENTRY_MC).toFixed(0) + ' de benefice\n'
+    + '🛑 SL : -' + SL_PCT + '% → -$' + (MISE_USD * SL_PCT / 100) + '\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
-    + '🎯 TP : +' + TP_PCT + '% → +$' + (MISE_USD * TP_PCT / 100) + '\n'
-    + '🛑 SL : -' + SL_PCT + '% → -$' + (MISE_USD * SL_PCT / 100) + '\n'
     + '🔄 Trailing : -' + TRAILING_PCT + '% (actif a +' + TRAILING_ACTIVATE_PCT + '%)\n'
     + '🔢 Max positions : ' + MAX_OPEN + '\n'
     + '📊 Rapports a 10, 20, 30 snipes\n'
