@@ -13,16 +13,16 @@ const SOL = 'So11111111111111111111111111111111111111112';
 const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
 // CONFIG SNIPER
-const MISE_LAMPORTS = 10000000;  // 0.01 SOL par snipe (~$1.5)
-const MISE_USD = 10;             // affichage $10 (ajuste selon prix SOL)
-const TP_PCT = 150;              // TP a +150%
-const SL_PCT = 40;               // SL a -40%
-const TRAILING_ACTIVATE_PCT = 50;// trailing actif apres +50%
-const TRAILING_PCT = 25;         // trail -25% depuis pic
+const MISE_LAMPORTS = 1200000000; // 1.2 SOL par snipe (~$200)
+const MISE_USD = 200;
+const TP_PCT = 50;               // TP a +50% = +$100 sur $200 de mise
+const SL_PCT = 30;               // SL a -30% — coupe les pertes plus vite
+const TRAILING_ACTIVATE_PCT = 35;// trailing actif apres +35% — capture plus de pumps
+const TRAILING_PCT = 15;         // trail -15% depuis pic — verrouille les gains serres
 const JITO_FEE = 500000;         // 0.0005 SOL priority fee agressif
-const MONITOR_INTERVAL = 10000; // check toutes les 10 sec
+const MONITOR_INTERVAL = 5000;  // check toutes les 5 sec — reaction rapide
 const MAX_OPEN = 3;              // max 3 positions en meme temps
-const TIMEOUT_CHECKS = 60;       // 10 min max par position
+const TIMEOUT_CHECKS = 60;       // 5 min max (60 x 5s) — tokens morts = exit rapide
 
 const sniped = new Set();
 const positions = {};
@@ -133,9 +133,6 @@ async function monitorSnipe(mint, name, buyTime) {
   let peak = 0;
   let trailingActive = false;
   let checks = 0;
-
-  // Laisse 15s pour que DexScreener indexe le token
-  await new Promise(r => setTimeout(r, 15000));
 
   const interval = setInterval(async () => {
     try {
