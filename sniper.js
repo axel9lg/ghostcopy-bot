@@ -109,27 +109,37 @@ async function sellToken(mint) {
 
 async function sendSniperReport() {
   const winRate = stats.total > 0 ? Math.round((stats.wins / stats.total) * 100) : 0;
-  const gainBrut = (stats.wins * MISE_USD * TP_PCT / 100).toFixed(0);
-  const perteBrut = (stats.losses * MISE_USD * SL_PCT / 100).toFixed(0);
-  const net = (parseFloat(gainBrut) - parseFloat(perteBrut)).toFixed(0);
-  const netEmoji = parseFloat(net) >= 0 ? '✅' : '🔴';
+  const gainBrut = stats.wins * MISE_USD * TP_PCT / 100;
+  const perteBrut = stats.losses * MISE_USD * SL_PCT / 100;
+  const net = gainBrut - perteBrut;
+  const netEmoji = net >= 0 ? '✅' : '🔴';
   const fastest = stats.fastestWinMs < Infinity ? Math.round(stats.fastestWinMs / 1000) + 's (' + stats.fastestToken + ')' : 'N/A';
+
+  let recommandation;
+  if (winRate >= 50 && net > 0) {
+    recommandation = '💹 RENTABLE — Tu peux augmenter la mise';
+  } else if (winRate >= 40 && net >= -MISE_USD) {
+    recommandation = '⚖️ NEUTRE — Continue pour plus de donnees';
+  } else {
+    recommandation = '⚠️ NEGATIF — Reduis la mise ou change de strategie';
+  }
+
   await sendTelegram(
-    '📊 RAPPORT SNIPER — ' + stats.total + ' TRADES\n'
+    '📊 BILAN ' + stats.total + ' SNIPES\n'
     + '==================\n'
-    + '🏆 TP atteint : ' + stats.wins + ' (' + winRate + '%)\n'
-    + '🔴 Stop loss : ' + stats.losses + '\n'
+    + '🏆 Wins (TP) : ' + stats.wins + '\n'
+    + '🔴 Losses (SL) : ' + stats.losses + '\n'
+    + '📊 Win rate : ' + winRate + '%\n'
     + '==================\n'
     + '💰 Mise par trade : $' + MISE_USD + '\n'
-    + '📈 Gains bruts : +$' + gainBrut + '\n'
-    + '📉 Pertes : -$' + perteBrut + '\n'
-    + netEmoji + ' NET : ' + (parseFloat(net) >= 0 ? '+' : '') + '$' + net + '\n'
+    + '📈 Gains bruts : +$' + gainBrut.toFixed(0) + '\n'
+    + '📉 Pertes totales : -$' + perteBrut.toFixed(0) + '\n'
+    + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n'
     + '==================\n'
     + '🥇 Meilleur gain : +' + stats.bestGainPct + '% (' + (stats.bestToken || 'N/A') + ')\n'
     + '⚡ Win le plus rapide : ' + fastest + '\n'
-    + '👁 En surveillance : ' + Object.keys(watched).length + '\n'
     + '==================\n'
-    + 'Win rate : ' + winRate + '%\n'
+    + recommandation + '\n'
     + '=================='
   );
 }
@@ -153,7 +163,7 @@ async function monitorSnipe(mint, name, buyTime) {
           await sendTelegram(
             '🔴 SNIPE ABANDONNE\n==================\n🪙 ' + name + '\nNon indexe apres 1 min\n==================\nPERTE ESTIMEE : -$' + (MISE_USD * SL_PCT / 100)
           );
-          if (stats.total % 5 === 0) sendSniperReport();
+          if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         }
         return;
       }
@@ -185,7 +195,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total % 5 === 0) sendSniperReport();
+        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         return;
       }
 
@@ -211,7 +221,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '📊 https://dexscreener.com/solana/' + mint + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total % 5 === 0) sendSniperReport();
+        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         return;
       }
 
@@ -232,7 +242,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '📊 https://dexscreener.com/solana/' + mint + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total % 5 === 0) sendSniperReport();
+        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
         return;
       }
 
