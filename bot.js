@@ -11,8 +11,9 @@ const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=' + p
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const TARGETS = (process.env.TARGET_WALLET || '').split(',');
 const SOL = 'So11111111111111111111111111111111111111112';
-const MAX_MC = 2500;
-const TARGET_MC = 8000;
+const ENTRY_MC = 2500;
+const STOP_LOSS_MC = 2400;
+const TARGET_MC = 5000;
 const MIN_LIQUIDITY = 5000;
 const processed = new Set();
 const positions = {};
@@ -66,6 +67,57 @@ async function getTokenInfo(mint) {
   }
 }
 
+async function waitForEntry(mint, name, targetEntryMC) {
+  console.log('En attente MC $' + targetEntryMC + ' pour ' + name);
+  await sendTelegram('⏳ ATTENTE ENTREE\n==================\n🪙 TOKEN : ' + name + '\nMC actuel : en surveillance\nOn attend : $' + targetEntryMC + '\n==================');
+
+  const interval = setInterval(async () => {
+    try {
+      const { mc, price } = await getTokenInfo(mint);
+      if (!mc) return;
+
+      if (mc <= targetEntryMC) {
+        console.log('ENTREE DETECTEE : ' + name + ' a $' + mc);
+        await sendTelegram('🎯 ENTREE DETECTEE\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nACHAT EN COURS...\n==================');
+        clearInterval(interval);
+        await executeBuy(mint, name, mc, price);
+      }
+
+      if (mc > targetEntryMC * 2) {
+        console.log('Token trop monte, abandon : ' + name);
+        clearInterval(interval);
+      }
+    } catch(e) {}
+  }, 5000);
+}
+
+async function executeBuy(mint, name, entryMC, entryPrice) {
+  for (let i = 1; i <= 3; i++) {
+    try {
+      const SOL = 'So11111111111111111111111111111111111111112';
+      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + availableSOL + '&slippageBps=150');
+      const q = await qr.json();
+      if (!q.outAmount) continue;
+      const sr = await fetch('https://api.jup.ag/swap/v1/swap', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ quoteResponse: q, userPublicKey: myWallet.publicKey.toString(), wrapAndUnwrapSol: true })
+      });
+      const sd = await sr.json();
+      if (!sd.swapTransaction) continue;
+      const buf = Buffer.from(sd.swapTransaction, 'base64');
+      const vtx = VersionedTransaction.deserialize(buf);
+      vtx.sign([myWallet]);
+      const sig = await connection.sendRawTransaction(vtx.serialize(), {skipPreflight: true, maxRetries: 3});
+      await sendTelegram('✅ ACHAT REUSSI\n==================\n🪙 TOKEN : ' + name + '\nMC entree : $' + entryMC.toLocaleString() + '\nPRIX : $' + entryPrice + '\nSTOP LOSS : $2,400 MC\nOBJECTIF : $5,000 MC\n==================\n🔗 TX : https://solscan.io/tx/' + sig);
+      monitorMC(mint, name, entryMC);
+      break;
+    } catch(e) {
+      console.log('Tentative ' + i + ' : ' + e.message);
+    }
+  }
+}
+
 async function handleWallet(TARGET_WALLET) {
   const pubkey = new PublicKey(TARGET_WALLET);
   connection.onLogs(pubkey, async (logs) => {
@@ -86,12 +138,13 @@ async function handleWallet(TARGET_WALLET) {
       const rugRisks = [];
       if (liquidity < MIN_LIQUIDITY && liquidity > 0) rugRisks.push('liquidite faible $' + liquidity.toFixed(0));
       if (ageMinutes < 5) rugRisks.push('token tres recent ' + ageMinutes + 'min');
-      if (mc > MAX_MC && mc > 0) rugRisks.push('MC trop eleve $' + mc.toLocaleString());
+      if (mc > ENTRY_MC && mc > 0) rugRisks.push('MC trop eleve $' + mc.toLocaleString());
 
       const rugScore = rugRisks.length === 0 ? '🟢 SAFE' : rugRisks.length === 1 ? '🟡 RISQUE ' + rugRisks.join(', ') : '🔴 DANGER ' + rugRisks.join(', ');
 
-      if (mc > MAX_MC && mc > 0) {
-        await sendTelegram('🚫 IGNORE ' + name + ' - MC trop eleve $' + mc.toLocaleString());
+      if (mc > ENTRY_MC && mc > 0) {
+        console.log('MC trop eleve : $' + mc + ', on surveille...');
+        await waitForEntry(mint, name, ENTRY_MC);
         return;
       }
 
@@ -175,7 +228,7 @@ async function monitorMC(mint, name, entryMC) {
         await sendTelegram('⏱ SUIVI ' + name + '\n==================\nMC actuel : $' + mc.toLocaleString() + '\nVariation : ' + (pct2 > 0 ? '+' : '') + pct2 + '%\nPic : $' + peak.toLocaleString() + '\nObjectif : $8,000\n==================');
       }
 
-      if (mc >= 8000) {
+      if (mc >= TARGET_MC) {
         stats.reached8k++;
         stats.exitMCs.push(mc);
         const gainPct = Math.round((mc/entryMC-1)*100);
