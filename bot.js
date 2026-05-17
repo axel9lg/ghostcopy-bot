@@ -177,12 +177,13 @@ async function executeBuy(mint, name, entryMC, entryPrice, walletAddr) {
 }
 
 async function handleWallet(TARGET_WALLET) {
-  if (!walletStats[TARGET_WALLET]) walletStats[TARGET_WALLET] = { wins: 0, losses: 0, disabled: false };
+  if (!walletStats[TARGET_WALLET]) walletStats[TARGET_WALLET] = { wins: 0, losses: 0, disabled: false, entryMCs: [] };
   const pubkey = new PublicKey(TARGET_WALLET);
   connection.onLogs(pubkey, async (logs) => {
     if (logs.err || processed.has(logs.signature)) return;
     if (walletStats[TARGET_WALLET]?.disabled) return;
     processed.add(logs.signature);
+    const detectedAt = Date.now();
     try {
       await new Promise(r => setTimeout(r, 500));
       const tx = await connection.getParsedTransaction(logs.signature, {maxSupportedTransactionVersion: 0});
@@ -192,27 +193,57 @@ async function handleWallet(TARGET_WALLET) {
       const bought = post.find(p => p.owner === TARGET_WALLET && !pre.find(b => b.mint === p.mint && b.owner === TARGET_WALLET));
       if (!bought) return;
       const mint = bought.mint;
-      const { mc, price, name, volume, txns, age, ageMinutes, liquidity, holders, liquidityLocked, score } = await getTokenInfo(mint);
+
+      // Latence depuis la transaction du wallet
+      const txTime = tx.blockTime ? tx.blockTime * 1000 : detectedAt;
+      const latencyMs = detectedAt - txTime;
+      const latencySec = (latencyMs / 1000).toFixed(1);
+
+      const { mc, price, name, volume, txns, age, ageMinutes, liquidity, score } = await getTokenInfo(mint);
+      if (!mc) return;
+
       const shortWallet = TARGET_WALLET.slice(0,4) + '...' + TARGET_WALLET.slice(-4);
 
-      const rugRisks = [];
-      if (liquidity < MIN_LIQUIDITY && liquidity > 0) rugRisks.push('liquidite faible $' + liquidity.toFixed(0));
-      if (ageMinutes < 5) rugRisks.push('token tres recent ' + ageMinutes + 'min');
-      if (holders < 50 && holders > 0) rugRisks.push('peu de holders ' + holders);
-      if (!liquidityLocked) rugRisks.push('liquidite non lockee');
+      // Analyse entrée
+      const ws = walletStats[TARGET_WALLET];
+      ws.entryMCs.push(mc);
+      const avgEntryMC = Math.round(ws.entryMCs.reduce((a, b) => a + b, 0) / ws.entryMCs.length);
+      const potentialGain = mc > 0 ? Math.round((TARGET_MC / mc - 1) * 100) : 0;
+      const potentialUSD = ((potentialGain / 100) * MISE_USD).toFixed(2);
 
-      const scoreEmoji = score >= 7 ? '🟢' : score >= 5 ? '🟡' : '🔴';
-      const rugScore = rugRisks.length === 0 ? '🟢 SAFE' : rugRisks.length === 1 ? '🟡 RISQUE ' + rugRisks.join(', ') : '🔴 DANGER ' + rugRisks.join(', ');
+      const scoreEmoji = score >= 7 ? '🟢' : score >= 4 ? '🟡' : '🔴';
+      const entryQuality = mc <= 2000 ? '🔥 SNIPE PARFAIT' : mc <= ENTRY_MC ? '✅ BONNE ENTREE' : mc <= 5000 ? '🟡 ENTREE TARDIVE' : '🔴 TROP TARD';
+      const liquiditeOk = liquidity >= MIN_LIQUIDITY ? '✅' : '⚠️';
 
-      if (score < 7) {
-        await sendTelegram('⚠️ IGNORE — Score trop bas\n==================\n🪙 ' + name + '\n' + scoreEmoji + ' SCORE : ' + score + '/10\nRaison : ' + (rugRisks.join(', ') || 'activite insuffisante') + '\n==================');
-        return;
-      }
+      await sendTelegram(
+        '⚡ GHOSTCOPY SIGNAL ⚡\n'
+        + '==================\n'
+        + '🪙 ' + name + '\n'
+        + '👛 COPIE : ' + shortWallet + '\n'
+        + '==================\n'
+        + '📊 MC DETECTE : $' + mc.toLocaleString() + '\n'
+        + '💵 PRIX : $' + price + '\n'
+        + '⏰ AGE TOKEN : ' + age + '\n'
+        + '💧 LIQUIDITE : ' + liquiditeOk + ' $' + liquidity.toLocaleString() + '\n'
+        + '📈 VOLUME : $' + volume.toLocaleString() + '\n'
+        + '🔄 TXS : ' + txns + '\n'
+        + '==================\n'
+        + '⚡ LATENCE : ' + latencyMs + 'ms (' + latencySec + 's apres le wallet)\n'
+        + entryQuality + '\n'
+        + '==================\n'
+        + scoreEmoji + ' SCORE ACTIVITE : ' + score + '/10\n'
+        + '==================\n'
+        + '🎯 ANALYSE SNIPE\n'
+        + '   Entree possible : $' + mc.toLocaleString() + ' MC\n'
+        + '   Objectif $6k : +' + potentialGain + '% (+$' + potentialUSD + ')\n'
+        + '   Mise $' + MISE_USD + ' → $' + (MISE_USD + parseFloat(potentialUSD)).toFixed(2) + '\n'
+        + (ws.entryMCs.length > 1 ? '   MC moyen wallet : $' + avgEntryMC.toLocaleString() + ' (' + ws.entryMCs.length + ' trades)\n' : '')
+        + '==================\n'
+        + '📊 https://dexscreener.com/solana/' + mint
+      );
 
-      const entryStatus = mc <= ENTRY_MC ? '✅ ENTREE $3K POSSIBLE' : '⏳ MC A $' + mc.toLocaleString() + ' — SURVEILLANCE $3K';
-      const snipeNote = ageMinutes > 0 ? '💡 Lance il y a ' + ageMinutes + ' min — snipe ideal au lancement' : '';
-
-      await sendTelegram('⚡ GHOSTCOPY SIGNAL ⚡\n==================\n🪙 ' + name + '\n==================\n📊 MC : $' + (mc ? mc.toLocaleString() : 'inconnu') + '\n💵 PRIX : $' + price + '\n⏰ AGE : ' + age + '\n💧 LIQUIDITE : $' + liquidity.toLocaleString() + '\n📈 VOLUME 24H : $' + volume.toLocaleString() + '\n🔄 TXS 24H : ' + txns + '\n==================\n' + scoreEmoji + ' SCORE : ' + score + '/10\n' + rugScore + '\n==================\n👛 COPIE : ' + shortWallet + '\n' + entryStatus + '\n' + snipeNote + '\n==================\n📊 https://dexscreener.com/solana/' + mint);
+      // Seulement si liquide et MC raisonnable
+      if (liquidity < 500) return;
 
       if (mc > ENTRY_MC && mc > 0) {
         await waitForEntry(mint, name, ENTRY_MC, TARGET_WALLET);
