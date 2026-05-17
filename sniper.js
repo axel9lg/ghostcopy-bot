@@ -389,70 +389,68 @@ function findNewMint(tx) {
 
 async function startSniper() {
   const pumpKey = new PublicKey(PUMP_PROGRAM);
-  let subId = null;
-  let retryDelay = 5000;
+  const processedSigs = new Set();
 
-  const handler = async (logs) => {
-    if (logs.err) return;
-    const isCreate = logs.logs.some(l =>
-      l.includes('InitializeMint') ||
-      l.includes('Instruction: Create') ||
-      l.includes('Instruction: Initialize')
-    );
-    if (!isCreate) return;
-    if (sniped.has(logs.signature)) return;
-
-    try {
-      const tx = await connection.getParsedTransaction(logs.signature, {
-        maxSupportedTransactionVersion: 0,
-        commitment: 'confirmed'
-      });
-      if (!tx || !tx.meta) return;
-
-      const mint = findNewMint(tx);
-      if (!mint) return;
-
-      if (!checkCreatorCommitment(tx)) {
-        stats.skipped++;
-        return;
-      }
-
-      await validateAndSnipe(mint);
-    } catch(e) {
-      console.log('[SNIPER] Erreur tx : ' + e.message);
-    }
-  };
-
-  async function subscribe() {
-    try {
-      if (subId !== null) {
-        try { await connection.removeOnLogsListener(subId); } catch(e) {}
-        subId = null;
-      }
-      subId = connection.onLogs(pumpKey, handler, 'confirmed');
-      retryDelay = 5000;
-      console.log('[WS] Abonne aux logs Pump.fun (subId: ' + subId + ')');
-    } catch(e) {
-      console.log('[WS] Erreur abonnement : ' + e.message + ' — retry dans ' + retryDelay / 1000 + 's');
-      setTimeout(() => {
-        retryDelay = Math.min(retryDelay * 2, 60000);
-        subscribe();
-      }, retryDelay);
-    }
+  // Marquer les dernieres signatures comme deja vues au demarrage
+  try {
+    const init = await connection.getSignaturesForAddress(pumpKey, { limit: 10, commitment: 'confirmed' });
+    init.forEach(s => processedSigs.add(s.signature));
+    console.log('[POLL] ' + init.length + ' signatures initiales marquees — pret');
+  } catch(e) {
+    console.log('[POLL] Init erreur : ' + e.message);
   }
 
-  await subscribe();
+  // Polling HTTP toutes les 3s — pas de WebSocket, pas de 429
+  setInterval(async () => {
+    try {
+      // Nettoyage memoire periodique
+      if (processedSigs.size > 2000) {
+        const arr = [...processedSigs];
+        processedSigs.clear();
+        arr.slice(-1000).forEach(s => processedSigs.add(s));
+      }
 
-  // Re-abonnement toutes les 5 min pour eviter les deconnexions silencieuses
-  setInterval(() => {
-    console.log('[WS] Re-abonnement preventif...');
-    subscribe();
-  }, 5 * 60 * 1000);
+      const sigs = await connection.getSignaturesForAddress(pumpKey, { limit: 30, commitment: 'confirmed' });
 
-  console.log('Sniper v3 actif — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC | Createur min ' + MIN_CREATOR_SOL + ' SOL');
+      for (const sigInfo of sigs) {
+        if (sigInfo.err || processedSigs.has(sigInfo.signature)) continue;
+        processedSigs.add(sigInfo.signature);
+
+        try {
+          const tx = await connection.getParsedTransaction(sigInfo.signature, {
+            maxSupportedTransactionVersion: 0,
+            commitment: 'confirmed'
+          });
+          if (!tx || !tx.meta) continue;
+
+          const logs = tx.meta.logMessages || [];
+          const isCreate = logs.some(l =>
+            l.includes('InitializeMint') ||
+            l.includes('Instruction: Create') ||
+            l.includes('Instruction: Initialize')
+          );
+          if (!isCreate) continue;
+
+          const mint = findNewMint(tx);
+          if (!mint) continue;
+
+          if (!checkCreatorCommitment(tx)) {
+            stats.skipped++;
+            continue;
+          }
+
+          await validateAndSnipe(mint);
+        } catch(e) {}
+      }
+    } catch(e) {
+      console.log('[POLL] Erreur : ' + e.message);
+    }
+  }, 3000);
+
+  console.log('[POLL] Sniper v3 actif — polling toutes les 3s — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
     '🎯 SNIPER v3 DEMARRE\n==================\n'
-    + '📡 Nouveaux tokens Pump.fun\n'
+    + '📡 Polling Pump.fun (HTTP, plus de 429)\n'
     + '👤 Filtre createur : min ' + MIN_CREATOR_SOL + ' SOL investi\n'
     + '📊 Zone entree : $' + MIN_ENTRY_MC.toLocaleString() + ' — $' + MAX_ENTRY_MC.toLocaleString() + ' MC\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
