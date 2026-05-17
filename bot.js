@@ -50,20 +50,42 @@ async function getTokenInfo(mint) {
       const mins = created % 60;
       const age = hours > 0 ? hours + 'h ' + mins + 'm' : mins + 'm';
       const liquidity = p.liquidity?.usd || 0;
+      const holders = p.info?.holders || 0;
+      const liquidityLocked = p.info?.liquidityLocked || false;
+
+      let score = 0;
+      if (p.volume?.h24 > 10000) score += 3;
+      else if (p.volume?.h24 > 5000) score += 2;
+      else if (p.volume?.h24 > 1000) score += 1;
+
+      if (liquidity > 10000) score += 3;
+      else if (liquidity > 5000) score += 2;
+      else if (liquidity > 2000) score += 1;
+
+      if (created > 30) score += 2;
+      else if (created > 10) score += 1;
+
+      const txns = (p.txns?.h24?.buys || 0) + (p.txns?.h24?.sells || 0);
+      if (txns > 500) score += 2;
+      else if (txns > 100) score += 1;
+
       return {
         mc: p.fdv || 0,
         price: parseFloat(p.priceUsd) || 0,
         name: p.baseToken.symbol || mint.slice(0,8),
         volume: p.volume?.h24 || 0,
-        txns: (p.txns?.h24?.buys || 0) + (p.txns?.h24?.sells || 0),
+        txns,
         age,
         ageMinutes: created,
-        liquidity
+        liquidity,
+        holders,
+        liquidityLocked,
+        score
       };
     }
-    return { mc: 0, price: 0, name: mint.slice(0,8), volume: 0, txns: 0, age: 'inconnu', ageMinutes: 0, liquidity: 0 };
+    return { mc: 0, price: 0, name: mint.slice(0,8), volume: 0, txns: 0, age: 'inconnu', ageMinutes: 0, liquidity: 0, holders: 0, liquidityLocked: false, score: 0 };
   } catch(e) {
-    return { mc: 0, price: 0, name: mint.slice(0,8), volume: 0, txns: 0, age: 'inconnu', ageMinutes: 0, liquidity: 0 };
+    return { mc: 0, price: 0, name: mint.slice(0,8), volume: 0, txns: 0, age: 'inconnu', ageMinutes: 0, liquidity: 0, holders: 0, liquidityLocked: false, score: 0 };
   }
 }
 
@@ -132,15 +154,23 @@ async function handleWallet(TARGET_WALLET) {
       const bought = post.find(p => p.owner === TARGET_WALLET && !pre.find(b => b.mint === p.mint && b.owner === TARGET_WALLET));
       if (!bought) return;
       const mint = bought.mint;
-      const { mc, price, name, volume, txns, age, ageMinutes, liquidity } = await getTokenInfo(mint);
+      const { mc, price, name, volume, txns, age, ageMinutes, liquidity, holders, liquidityLocked, score } = await getTokenInfo(mint);
       const shortWallet = TARGET_WALLET.slice(0,4) + '...' + TARGET_WALLET.slice(-4);
 
       const rugRisks = [];
       if (liquidity < MIN_LIQUIDITY && liquidity > 0) rugRisks.push('liquidite faible $' + liquidity.toFixed(0));
       if (ageMinutes < 5) rugRisks.push('token tres recent ' + ageMinutes + 'min');
-      if (mc > ENTRY_MC && mc > 0) rugRisks.push('MC trop eleve $' + mc.toLocaleString());
+      if (holders < 50 && holders > 0) rugRisks.push('peu de holders ' + holders);
+      if (!liquidityLocked) rugRisks.push('liquidite non lockee');
 
+      const scoreEmoji = score >= 7 ? '🟢' : score >= 5 ? '🟡' : '🔴';
       const rugScore = rugRisks.length === 0 ? '🟢 SAFE' : rugRisks.length === 1 ? '🟡 RISQUE ' + rugRisks.join(', ') : '🔴 DANGER ' + rugRisks.join(', ');
+
+      if (score < 7) {
+        console.log('Score trop bas : ' + score + '/10 pour ' + name + ', ignore');
+        await sendTelegram('⚠️ IGNORE - Score trop bas\n==================\n🪙 TOKEN : ' + name + '\n' + scoreEmoji + ' SCORE : ' + score + '/10\nRaison : ' + rugRisks.join(', ') + '\n==================');
+        return;
+      }
 
       if (mc > ENTRY_MC && mc > 0) {
         console.log('MC trop eleve : $' + mc + ', on surveille...');
@@ -188,7 +218,8 @@ monitorMC(mint, name, mc);
         + '📈 VOLUME 24H : $' + volume.toLocaleString() + '\n'
         + '🔄 TXS 24H : ' + txns + '\n'
         + '⏰ AGE : ' + age + '\n\n'
-        + rugScore + '\n\n'
+        + rugScore + '\n'
+        + scoreEmoji + ' SCORE : ' + score + '/10\n\n'
         + '==================\n'
         + '👛 WALLET : ' + shortWallet + '\n'
         + '💰 MISE : 0.005 SOL\n\n'
