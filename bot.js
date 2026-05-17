@@ -211,44 +211,48 @@ async function monitorMC(mint, name, entryMC) {
   stats.total++;
   stats.entryMCs.push(entryMC);
   let peak = entryMC;
+  let sold40 = false;
+  let sold35 = false;
+  let sold25 = false;
   const startTime = Date.now();
-  await sendTelegram('📊 SUIVI OUVERT\n==================\n🪙 ' + name + '\nEntree MC : $' + entryMC.toLocaleString() + '\nObjectif : $8,000\nStop Loss : $1,500\n==================\nSurveillance toutes les 15 sec...');
+
+  await sendTelegram('📊 POSITION OUVERTE\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\n\n🎯 TP1 : $4,800 MC → vendre 40%\n🎯 TP2 : $6,000 MC → vendre 35%\n🎯 TP3 : $7,000 MC → vendre 25%\n🛑 SL : $2,400 MC\n==================');
 
   const interval = setInterval(async () => {
     try {
-      const { mc } = await getTokenInfo(mint);
+      const { mc, price } = await getTokenInfo(mint);
       if (!mc) return;
       if (mc > peak) peak = mc;
-      const pct = Math.round((mc/entryMC-1)*100);
-      const status = mc > entryMC ? '+' + pct + '%' : pct + '%';
-      console.log(name + ' | MC actuel : $' + mc.toLocaleString() + ' | ' + status);
+      const duree = Math.round((Date.now() - startTime) / 60000);
 
-      if (Date.now() % 300000 < 15000) {
-        const pct2 = Math.round((mc/entryMC-1)*100);
-        await sendTelegram('⏱ SUIVI ' + name + '\n==================\nMC actuel : $' + mc.toLocaleString() + '\nVariation : ' + (pct2 > 0 ? '+' : '') + pct2 + '%\nPic : $' + peak.toLocaleString() + '\nObjectif : $8,000\n==================');
-      }
-
-      if (mc >= TARGET_MC) {
-        stats.reached8k++;
-        stats.exitMCs.push(mc);
-        const gainPct = Math.round((mc/entryMC-1)*100);
-        const bilan = '🏆 BILAN FINAL\n==================\n🪙 TOKEN : ' + name + '\n\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic atteint : $' + peak.toLocaleString() + ' MC\n\nGain : +' + gainPct + '%\nObjectif $8,000 : ATTEINT\nStop Loss : NON DECLENCHE\n\nDuree : ' + Math.round((Date.now() - startTime)/60000) + ' min\n==================\n STRATEGIE GAGNANTE';
-        await sendTelegram(bilan);
-        clearInterval(interval);
-        if (stats.total % 10 === 0) sendReport();
-      } else if (mc >= 5000) {
+      if (!sold40 && mc >= 4800) {
+        sold40 = true;
         stats.reached5k++;
-      } else if (mc >= 3000) {
-        stats.reached3k++;
-      } else if (mc <= entryMC * 0.5) {
-        stats.rugged++;
-        stats.exitMCs.push(mc);
+        await sendTelegram('🟡 TP1 ATTEINT - VENDRE 40%\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n\nVendre 40% maintenant\nGarder 60% pour TP2 et TP3\n==================\n📉 https://dexscreener.com/solana/' + mint);
+      }
+
+      if (!sold35 && mc >= 6000) {
+        sold35 = true;
+        stats.reached8k++;
+        await sendTelegram('🟠 TP2 ATTEINT - VENDRE 35%\n==================\n🪙 TOKEN : ' + name + '\nMC : $' + mc.toLocaleString() + '\nPRIX : $' + price + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n\nVendre 35% maintenant\nGarder 25% pour TP3\n==================\n📉 https://dexscreener.com/solana/' + mint);
+      }
+
+      if (!sold25 && mc >= 7000) {
+        sold25 = true;
+        const gainPct = Math.round((mc/entryMC-1)*100);
+        await sendTelegram('🏆 TP3 ATTEINT - VENDRE TOUT\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nGain total : +' + gainPct + '%\nDuree : ' + duree + ' min\n==================\n STRATEGIE COMPLETE');
+        clearInterval(interval);
+        if (stats.total % 10 === 0) sendReport();
+        return;
+      }
+
+      if (mc <= 2400) {
         const pertePct = Math.round((mc/entryMC-1)*100);
-        const bilan = '📋 BILAN FINAL\n==================\n🪙 TOKEN : ' + name + '\n\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic atteint : $' + peak.toLocaleString() + ' MC\n\nPerte : ' + pertePct + '%\nObjectif $8,000 : NON ATTEINT\nStop Loss : DECLENCHE\n\nDuree : ' + Math.round((Date.now() - startTime)/60000) + ' min\n==================\n STRATEGIE PERDANTE';
-        await sendTelegram(bilan);
+        await sendTelegram('🔴 STOP LOSS DECLENCHE\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nPerte : ' + pertePct + '%\nDuree : ' + duree + ' min\n==================');
         clearInterval(interval);
         if (stats.total % 10 === 0) sendReport();
       }
+
     } catch(e) {}
   }, 15000);
 }
