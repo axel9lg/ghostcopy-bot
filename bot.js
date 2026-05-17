@@ -158,6 +158,7 @@ async function monitorMC(mint, name, entryMC) {
   stats.total++;
   stats.entryMCs.push(entryMC);
   let peak = entryMC;
+  const startTime = Date.now();
   await sendTelegram('📊 SUIVI OUVERT\n==================\n🪙 ' + name + '\nEntree MC : $' + entryMC.toLocaleString() + '\nObjectif : $8,000\nStop Loss : $1,500\n==================\nSurveillance toutes les 15 sec...');
 
   const interval = setInterval(async () => {
@@ -177,7 +178,9 @@ async function monitorMC(mint, name, entryMC) {
       if (mc >= 8000) {
         stats.reached8k++;
         stats.exitMCs.push(mc);
-        await sendTelegram('🟢 OBJECTIF ATTEINT\n==================\n🪙 ' + name + '\nEntree : $' + entryMC.toLocaleString() + '\nSortie : $' + mc.toLocaleString() + '\nGain : +' + Math.round((mc/entryMC-1)*100) + '%\n==================');
+        const gainPct = Math.round((mc/entryMC-1)*100);
+        const bilan = '🏆 BILAN FINAL\n==================\n🪙 TOKEN : ' + name + '\n\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic atteint : $' + peak.toLocaleString() + ' MC\n\nGain : +' + gainPct + '%\nObjectif $8,000 : ATTEINT\nStop Loss : NON DECLENCHE\n\nDuree : ' + Math.round((Date.now() - startTime)/60000) + ' min\n==================\n STRATEGIE GAGNANTE';
+        await sendTelegram(bilan);
         clearInterval(interval);
         if (stats.total % 10 === 0) sendReport();
       } else if (mc >= 5000) {
@@ -187,7 +190,9 @@ async function monitorMC(mint, name, entryMC) {
       } else if (mc <= entryMC * 0.5) {
         stats.rugged++;
         stats.exitMCs.push(mc);
-        await sendTelegram('🔴 RUG\n==================\n🪙 ' + name + '\nEntree : $' + entryMC.toLocaleString() + '\nPic : $' + peak.toLocaleString() + '\nPerte : ' + Math.round((mc/entryMC-1)*100) + '%\n==================');
+        const pertePct = Math.round((mc/entryMC-1)*100);
+        const bilan = '📋 BILAN FINAL\n==================\n🪙 TOKEN : ' + name + '\n\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic atteint : $' + peak.toLocaleString() + ' MC\n\nPerte : ' + pertePct + '%\nObjectif $8,000 : NON ATTEINT\nStop Loss : DECLENCHE\n\nDuree : ' + Math.round((Date.now() - startTime)/60000) + ' min\n==================\n STRATEGIE PERDANTE';
+        await sendTelegram(bilan);
         clearInterval(interval);
         if (stats.total % 10 === 0) sendReport();
       }
