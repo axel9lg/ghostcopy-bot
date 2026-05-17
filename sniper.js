@@ -389,10 +389,11 @@ function findNewMint(tx) {
 
 async function startSniper() {
   const pumpKey = new PublicKey(PUMP_PROGRAM);
+  let subId = null;
+  let retryDelay = 5000;
 
-  connection.onLogs(pumpKey, async (logs) => {
+  const handler = async (logs) => {
     if (logs.err) return;
-
     const isCreate = logs.logs.some(l =>
       l.includes('InitializeMint') ||
       l.includes('Instruction: Create') ||
@@ -411,7 +412,6 @@ async function startSniper() {
       const mint = findNewMint(tx);
       if (!mint) return;
 
-      // FILTRE 1 : le createur doit avoir investi au moins 0.3 SOL
       if (!checkCreatorCommitment(tx)) {
         stats.skipped++;
         return;
@@ -419,9 +419,35 @@ async function startSniper() {
 
       await validateAndSnipe(mint);
     } catch(e) {
-      console.log('[SNIPER] Erreur : ' + e.message);
+      console.log('[SNIPER] Erreur tx : ' + e.message);
     }
-  }, 'confirmed');
+  };
+
+  async function subscribe() {
+    try {
+      if (subId !== null) {
+        try { await connection.removeOnLogsListener(subId); } catch(e) {}
+        subId = null;
+      }
+      subId = connection.onLogs(pumpKey, handler, 'confirmed');
+      retryDelay = 5000;
+      console.log('[WS] Abonne aux logs Pump.fun (subId: ' + subId + ')');
+    } catch(e) {
+      console.log('[WS] Erreur abonnement : ' + e.message + ' — retry dans ' + retryDelay / 1000 + 's');
+      setTimeout(() => {
+        retryDelay = Math.min(retryDelay * 2, 60000);
+        subscribe();
+      }, retryDelay);
+    }
+  }
+
+  await subscribe();
+
+  // Re-abonnement toutes les 5 min pour eviter les deconnexions silencieuses
+  setInterval(() => {
+    console.log('[WS] Re-abonnement preventif...');
+    subscribe();
+  }, 5 * 60 * 1000);
 
   console.log('Sniper v3 actif — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC | Createur min ' + MIN_CREATOR_SOL + ' SOL');
   await sendTelegram(
