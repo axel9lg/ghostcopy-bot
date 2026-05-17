@@ -242,7 +242,7 @@ async function monitorMC(mint, name, entryMC) {
         const gainPct = Math.round((mc/entryMC-1)*100);
         await sendTelegram('🏆 TP3 ATTEINT - VENDRE TOUT\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nGain total : +' + gainPct + '%\nDuree : ' + duree + ' min\n==================\n STRATEGIE COMPLETE');
         clearInterval(interval);
-        if (stats.total % 10 === 0) sendReport();
+        if (stats.total % 5 === 0) sendReport();
         return;
       }
 
@@ -250,7 +250,7 @@ async function monitorMC(mint, name, entryMC) {
         const pertePct = Math.round((mc/entryMC-1)*100);
         await sendTelegram('🔴 STOP LOSS DECLENCHE\n==================\n🪙 TOKEN : ' + name + '\nEntree : $' + entryMC.toLocaleString() + ' MC\nSortie : $' + mc.toLocaleString() + ' MC\nPic : $' + peak.toLocaleString() + ' MC\nPerte : ' + pertePct + '%\nDuree : ' + duree + ' min\n==================');
         clearInterval(interval);
-        if (stats.total % 10 === 0) sendReport();
+        if (stats.total % 5 === 0) sendReport();
       }
 
     } catch(e) {}
