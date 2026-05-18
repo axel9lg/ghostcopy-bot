@@ -42,8 +42,8 @@ async function processTxQueue() {
   processingQueue = true;
   while (txQueue.length > 0) {
     const { signature, timestamp } = txQueue.shift();
-    // Ignore si le token a plus de 25 secondes (trop tard pour sniper)
-    if (Date.now() - timestamp > 25000) continue;
+    // Ignore si plus de 5 secondes — trop vieux pour sniper au bon prix
+    if (Date.now() - timestamp > 5000) continue;
     try {
       console.log('[QUEUE] Traitement tx : ' + signature.slice(0, 12) + '...');
       const tx = await connection.getParsedTransaction(signature, {
