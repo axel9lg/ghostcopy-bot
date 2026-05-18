@@ -1,5 +1,5 @@
 if (process.env.NODE_ENV !== 'production') require('dotenv').config();
-const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, SystemProgram } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 const http = require('http');
@@ -23,8 +23,23 @@ const TP_PCT = 50;                // vendre a +50% depuis l entree
 const SL_PCT = 25;                // stop loss -25%
 const TRAILING_ACTIVATE_PCT = 25; // trailing actif des +25%
 const TRAILING_PCT = 15;          // coupe -15% depuis pic
-const JITO_FEE = 500000;
+const JITO_FEE = 500000;      // priorityFee Jupiter (lamports)
+const JITO_TIP = 1000000;     // pourboire validateurs Jito = 0.001 SOL (~$0.17)
 const MONITOR_INTERVAL = 5000;
+
+// Endpoints Jito block engine (validateurs prioritaires)
+const JITO_ENDPOINTS = [
+  'https://mainnet.block-engine.jito.labs.io/api/v1/bundles',
+  'https://amsterdam.mainnet.block-engine.jito.labs.io/api/v1/bundles',
+  'https://frankfurt.mainnet.block-engine.jito.labs.io/api/v1/bundles',
+  'https://ny.mainnet.block-engine.jito.labs.io/api/v1/bundles',
+];
+const JITO_TIP_ACCOUNTS = [
+  '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
+  'HFqU5x63VTqvB6pMFUFbTYPtoKyers4LcyHz7V1Y5TP',
+  'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY',
+  'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1sMaC9yXJrL',
+];
 const MAX_OPEN = 3;
 const MAX_WATCH_MIN = 30;         // abandonner si le token n atteint pas $25k en 30 min
 const MIN_LIQUIDITY = 1500;       // liquidite minimum au moment d acheter
@@ -54,6 +69,40 @@ async function sendTelegram(msg) {
       body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
     });
   } catch(e) {}
+}
+
+// Soumet la transaction via Jito (priorite haute) avec fallback RPC normal
+async function submitViaJito(vtx) {
+  const txBase64 = Buffer.from(vtx.serialize()).toString('base64');
+
+  try {
+    // Cree la transaction de pourboire pour les validateurs Jito
+    const tipAccount = new PublicKey(JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const tipTx = new Transaction({ recentBlockhash: blockhash, feePayer: myWallet.publicKey })
+      .add(SystemProgram.transfer({ fromPubkey: myWallet.publicKey, toPubkey: tipAccount, lamports: JITO_TIP }));
+    tipTx.sign(myWallet);
+    const tipBase64 = Buffer.from(tipTx.serialize()).toString('base64');
+
+    // Envoie les deux transactions en bundle au validateur le plus proche
+    const endpoint = JITO_ENDPOINTS[Math.floor(Math.random() * JITO_ENDPOINTS.length)];
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'sendBundle', params: [[txBase64, tipBase64]] })
+    });
+    const result = await r.json();
+    if (result.result) {
+      const sig = bs58.default.encode(Buffer.from(vtx.signatures[0]));
+      console.log('[JITO] Bundle envoye — ' + sig.slice(0, 12) + '... (tip ' + JITO_TIP / 1e9 + ' SOL)');
+      return sig;
+    }
+    throw new Error(result.error ? JSON.stringify(result.error) : 'Pas de resultat');
+  } catch(e) {
+    console.log('[JITO] Erreur bundle : ' + e.message + ' — fallback RPC');
+    // Fallback : envoi normal si Jito echoue
+    return await connection.sendRawTransaction(vtx.serialize(), { skipPreflight: true, maxRetries: 5 });
+  }
 }
 
 async function getTokenInfo(mint) {
@@ -98,7 +147,7 @@ async function sellToken(mint) {
     const buf = Buffer.from(sd.swapTransaction, 'base64');
     const vtx = VersionedTransaction.deserialize(buf);
     vtx.sign([myWallet]);
-    return await connection.sendRawTransaction(vtx.serialize(), { skipPreflight: true, maxRetries: 5 });
+    return await submitViaJito(vtx);
   } catch(e) {
     console.log('Erreur sell : ' + e.message);
     return null;
@@ -263,7 +312,7 @@ async function snipe(mint, name, entryMC) {
       const buf = Buffer.from(sd.swapTransaction, 'base64');
       const vtx = VersionedTransaction.deserialize(buf);
       vtx.sign([myWallet]);
-      const sig = await connection.sendRawTransaction(vtx.serialize(), { skipPreflight: true, maxRetries: 5 });
+      const sig = await submitViaJito(vtx);
 
       const buyTime = Date.now();
       positions[mint] = { status: 'open', buyTime, sig };
