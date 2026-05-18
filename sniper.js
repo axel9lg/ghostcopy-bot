@@ -18,13 +18,10 @@ const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 // CONFIG — v3 (analyse de nuit)
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const MIN_ENTRY_MC = 3500;        // zone d'entree : $3,500 MC minimum
-const MAX_ENTRY_MC = 5000;        // zone d'entree : $5,000 MC maximum
-const SL_PCT = 20;                // SL -20% — coupe les rugs plus vite
-const TRAILING_ACTIVATE_PCT = 25; // trailing actif des +25% (avant c'etait +30%)
-const TRAILING_PCT = 20;          // trail -20% depuis pic (avant -15%)
-const MIN_CREATOR_SOL = 0.05;     // createur doit avoir investi min 0.05 SOL
-const MIN_LIQUIDITY = 500;
+const TP_PCT = 100;               // x2 — vente a +100%
+const SL_PCT = 30;                // SL -30%
+const TRAILING_ACTIVATE_PCT = 50; // trailing actif a +50%
+const TRAILING_PCT = 20;          // trail -20% depuis pic
 const JITO_FEE = 500000;
 const MONITOR_INTERVAL = 5000;
 const MAX_OPEN = 3;
@@ -53,12 +50,12 @@ async function processTxQueue() {
         maxSupportedTransactionVersion: 0,
         commitment: 'confirmed'
       });
-      if (!tx || !tx.meta) { console.log('[QUEUE] Tx vide — skip'); continue; }
+      if (!tx || !tx.meta) continue;
       const mint = findNewMint(tx);
-      if (!mint) { console.log('[QUEUE] Pas de mint pump — skip'); continue; }
-      if (!checkCreatorCommitment(tx)) { stats.skipped++; continue; }
-      console.log('[QUEUE] Mint valide : ' + mint.slice(0, 12) + '...');
-      await validateAndSnipe(mint);
+      if (!mint) continue;
+      if (sniped.has(mint)) continue;
+      console.log('[SNIPER] Nouveau token : ' + mint.slice(0, 12) + '...');
+      await snipe(mint, mint.slice(0, 8), 0);
     } catch(e) { console.log('[QUEUE] Erreur : ' + e.message); }
     // 600ms entre chaque requete = max ~1.6 req/sec
     await new Promise(r => setTimeout(r, 600));
@@ -242,7 +239,33 @@ async function monitorSnipe(mint, name, buyTime) {
         return;
       }
 
-      // STOP LOSS -20%
+      // TAKE PROFIT x2 — vente a +100%
+      if (gainPct >= TP_PCT) {
+        clearInterval(interval);
+        const gainUSD = (gainPct / 100) * MISE_USD;
+        const dureeMs = Date.now() - buyTime;
+        if (dureeMs < stats.fastestWinMs) { stats.fastestWinMs = dureeMs; stats.fastestToken = name; }
+        if (gainPct > stats.bestGainPct) { stats.bestGainPct = gainPct; stats.bestToken = name; }
+        stats.wins++;
+        stats.totalGainUSD += gainUSD;
+        delete positions[mint];
+        const sig = await sellToken(mint);
+        await sendTelegram(
+          '🏆 x2 ATTEINT\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
+          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
+          + '💰 Gain : +' + gainPct + '% (+$' + gainUSD.toFixed(0) + ')\n'
+          + '💵 Valeur finale : $' + (MISE_USD + gainUSD).toFixed(0) + '\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
+          + 'BENEFICE NET : +$' + gainUSD.toFixed(0) + '\n'
+          + '📊 https://dexscreener.com/solana/' + mint + '\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
+        );
+        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+        return;
+      }
+
+      // STOP LOSS
       if (gainPct <= -SL_PCT) {
         clearInterval(interval);
         const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
@@ -473,10 +496,10 @@ async function startSniper() {
   console.log('[WS] Sniper v3 actif — WebSocket Helius — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
     '🎯 SNIPER v3 DEMARRE\n==================\n'
-    + '📡 WebSocket Helius + HTTP Alchemy\n'
-    + '👤 Filtre createur : min ' + MIN_CREATOR_SOL + ' SOL investi\n'
-    + '📊 Zone entree : $' + MIN_ENTRY_MC.toLocaleString() + ' — $' + MAX_ENTRY_MC.toLocaleString() + ' MC\n==================\n'
+    + '📡 Tous les nouveaux tokens Pump.fun\n'
+    + '⚡ Achat immediat a la creation\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
+    + '🎯 TP : +' + TP_PCT + '% (x2) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
     + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
     + '🛑 SL : -' + SL_PCT + '%\n'
     + '⏱ Timeout : 8 min\n'
