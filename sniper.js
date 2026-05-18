@@ -18,7 +18,8 @@ const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 // CONFIG — v3 (analyse de nuit)
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 100;               // x2 — vente a +100%
+const TP_NEW_MC = 4500;           // sortie si Twitter recent
+const TP_OLD_MC = 10000;          // sortie si Twitter etabli (>1000 followers)
 const SL_PCT = 30;                // SL -30%
 const TRAILING_ACTIVATE_PCT = 50; // trailing actif a +50%
 const TRAILING_PCT = 20;          // trail -20% depuis pic
@@ -42,8 +43,8 @@ async function processTxQueue() {
   processingQueue = true;
   while (txQueue.length > 0) {
     const { signature, timestamp } = txQueue.shift();
-    // Ignore si plus de 5 secondes — trop vieux pour sniper au bon prix
-    if (Date.now() - timestamp > 5000) continue;
+    // 15s pour laisser le temps au check Twitter
+    if (Date.now() - timestamp > 15000) continue;
     try {
       console.log('[QUEUE] Traitement tx : ' + signature.slice(0, 12) + '...');
       const tx = await connection.getParsedTransaction(signature, {
@@ -54,10 +55,32 @@ async function processTxQueue() {
       const mint = findNewMint(tx);
       if (!mint) continue;
       if (sniped.has(mint)) continue;
-      console.log('[SNIPER] Nouveau token : ' + mint.slice(0, 12) + '...');
-      await snipe(mint, mint.slice(0, 8), 0);
+
+      // Recupere les metadonnees Pump.fun (Twitter obligatoire)
+      const meta = await getPumpMeta(mint);
+      if (!meta || !meta.twitter) {
+        console.log('[SKIP] ' + mint.slice(0, 12) + ' — pas de Twitter');
+        stats.skipped++;
+        continue;
+      }
+
+      const twitterUrl = meta.twitter;
+      const username = twitterUrl
+        .replace(/https?:\/\/(www\.)?(twitter|x)\.com\//i, '')
+        .split(/[?/#@]/)[0].trim();
+      if (!username || username.length < 2) {
+        console.log('[SKIP] ' + mint.slice(0, 12) + ' — Twitter invalide');
+        stats.skipped++;
+        continue;
+      }
+
+      const twitterAge = await checkTwitterAge(username);
+      const tpMC = twitterAge === 'old' ? TP_OLD_MC : TP_NEW_MC;
+      const name = meta.symbol || meta.name || mint.slice(0, 8);
+
+      console.log('[SNIPER] ' + name + ' | @' + username + ' [' + twitterAge + '] | TP $' + tpMC.toLocaleString());
+      await snipe(mint, name, 0, tpMC, twitterAge, username);
     } catch(e) { console.log('[QUEUE] Erreur : ' + e.message); }
-    // 600ms entre chaque requete = max ~1.6 req/sec
     await new Promise(r => setTimeout(r, 600));
   }
   processingQueue = false;
@@ -85,6 +108,61 @@ async function sendTelegram(msg) {
       body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
     });
   } catch(e) {}
+}
+
+async function getPumpMeta(mint) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 4000);
+  try {
+    const r = await fetch('https://frontend-api.pump.fun/coins/' + mint, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { clearTimeout(id); return null; }
+}
+
+async function checkTwitterAge(username) {
+  // Retourne 'old' si compte etabli, 'new' sinon
+  const ctrlA = new AbortController();
+  const idA = setTimeout(() => ctrlA.abort(), 3000);
+  try {
+    const cdnR = await fetch(
+      'https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names=' + username,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: ctrlA.signal }
+    );
+    clearTimeout(idA);
+    if (cdnR.ok) {
+      const data = await cdnR.json();
+      if (Array.isArray(data) && data.length > 0 && data[0].followers_count !== undefined) {
+        const f = data[0].followers_count;
+        console.log('[TWITTER] @' + username + ' — ' + f + ' followers');
+        return f >= 1000 ? 'old' : 'new';
+      }
+    }
+  } catch(e) { clearTimeout(idA); }
+
+  const ctrlB = new AbortController();
+  const idB = setTimeout(() => ctrlB.abort(), 4000);
+  try {
+    const r = await fetch('https://x.com/' + username, {
+      headers: { 'User-Agent': 'Googlebot/2.1 (+http://www.google.com/bot.html)' },
+      signal: ctrlB.signal
+    });
+    clearTimeout(idB);
+    const html = await r.text();
+    const m = html.match(/"followers_count"\s*:\s*(\d+)/);
+    if (m) {
+      const f = parseInt(m[1]);
+      console.log('[TWITTER] @' + username + ' — ' + f + ' followers (html)');
+      return f >= 1000 ? 'old' : 'new';
+    }
+    if (r.status === 200 && html.length > 10000) return 'new';
+  } catch(e) { clearTimeout(idB); }
+
+  return 'new';
 }
 
 async function getTokenInfo(mint) {
@@ -180,7 +258,7 @@ async function sendSniperReport() {
   );
 }
 
-async function monitorSnipe(mint, name, buyTime) {
+async function monitorSnipe(mint, name, buyTime, tpMC) {
   let entryMC = null;
   let peak = 0;
   let trailingActive = false;
@@ -239,8 +317,8 @@ async function monitorSnipe(mint, name, buyTime) {
         return;
       }
 
-      // TAKE PROFIT x2 — vente a +100%
-      if (gainPct >= TP_PCT) {
+      // TAKE PROFIT — vente au MC cible
+      if (mc >= tpMC) {
         clearInterval(interval);
         const gainUSD = (gainPct / 100) * MISE_USD;
         const dureeMs = Date.now() - buyTime;
@@ -251,9 +329,9 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🏆 x2 ATTEINT\n==================\n🪙 ' + name + '\n'
+          '🏆 TP ATTEINT\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
-          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
+          + '📊 Sortie : $' + mc.toLocaleString() + ' MC (cible $' + tpMC.toLocaleString() + ')\n==================\n'
           + '💰 Gain : +' + gainPct + '% (+$' + gainUSD.toFixed(0) + ')\n'
           + '💵 Valeur finale : $' + (MISE_USD + gainUSD).toFixed(0) + '\n'
           + '⏱ Duree : ' + dureeMin + ' min\n==================\n'
@@ -306,7 +384,7 @@ async function monitorSnipe(mint, name, buyTime) {
   }, MONITOR_INTERVAL);
 }
 
-async function snipe(mint, name, entryMC) {
+async function snipe(mint, name, entryMC, tpMC, twitterAge, twitterUsername) {
   if (positions[mint]) return;
   if (Object.keys(positions).length >= MAX_OPEN) return;
   positions[mint] = { status: 'buying' };
@@ -350,20 +428,22 @@ async function snipe(mint, name, entryMC) {
       const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
       const trailingMC = Math.round(entryMC * (1 + TRAILING_ACTIVATE_PCT / 100));
 
+      const twitterLabel = twitterAge === 'old' ? '🟢 Twitter etabli' : '🔵 Twitter recent';
       await sendTelegram(
         '🎯 SNIPE EXECUTE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
+        + twitterLabel + ' (@' + (twitterUsername || '?') + ')\n'
+        + '==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '🔄 Trailing : actif a $' + trailingMC.toLocaleString() + ' MC (+' + TRAILING_ACTIVATE_PCT + '%), coupe -' + TRAILING_PCT + '% du pic\n'
-        + '🛑 SL : $' + slMC.toLocaleString() + ' MC (-' + SL_PCT + '%) → -$' + (MISE_USD * SL_PCT / 100) + '\n'
-        + '⏱ Timeout : 8 min\n'
+        + '🎯 TP : $' + tpMC.toLocaleString() + ' MC\n'
+        + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
+        + '🛑 SL : -' + SL_PCT + '% → -$' + (MISE_USD * SL_PCT / 100) + '\n'
         + '==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint
       );
 
-      monitorSnipe(mint, name, buyTime);
+      monitorSnipe(mint, name, buyTime, tpMC);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
@@ -493,18 +573,18 @@ async function startSniper() {
   // Re-abonnement toutes les 10 min pour eviter les deconnexions silencieuses
   setInterval(() => subscribe(), 10 * 60 * 1000);
 
-  console.log('[WS] Sniper actif — achat immediat tous les tokens — TP x2 +' + TP_PCT + '%');
+  console.log('[WS] Sniper actif — Twitter obligatoire — TP $' + TP_NEW_MC + ' (recent) / $' + TP_OLD_MC + ' (etabli)');
   await sendTelegram(
-    '🎯 SNIPER v3 DEMARRE\n==================\n'
-    + '📡 Tous les nouveaux tokens Pump.fun\n'
-    + '⚡ Achat immediat a la creation\n==================\n'
+    '🎯 SNIPER v4 DEMARRE\n==================\n'
+    + '📡 Nouveaux tokens Pump.fun avec Twitter\n'
+    + '🔍 Analyse Twitter : age du compte\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
-    + '🎯 TP : +' + TP_PCT + '% (x2) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
+    + '🔵 Twitter recent → TP $' + TP_NEW_MC.toLocaleString() + ' MC\n'
+    + '🟢 Twitter etabli → TP $' + TP_OLD_MC.toLocaleString() + ' MC\n'
     + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
     + '🛑 SL : -' + SL_PCT + '%\n'
-    + '⏱ Timeout : 8 min\n'
     + '🔢 Max positions : ' + MAX_OPEN + '\n'
-    + '📊 Rapports a 10, 20, 30 snipes\n'
+    + '📊 Rapport toutes les 10 snipes\n'
     + '=================='
   );
 }
