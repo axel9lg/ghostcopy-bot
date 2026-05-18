@@ -36,6 +36,34 @@ const sniped = new Set();
 const positions = {};
 const watched = {};
 
+// File d'attente pour limiter les appels getParsedTransaction
+const txQueue = [];
+let processingQueue = false;
+
+async function processTxQueue() {
+  if (processingQueue) return;
+  processingQueue = true;
+  while (txQueue.length > 0) {
+    const { signature, timestamp } = txQueue.shift();
+    // Ignore si le token a plus de 25 secondes (trop tard pour sniper)
+    if (Date.now() - timestamp > 25000) continue;
+    try {
+      const tx = await connection.getParsedTransaction(signature, {
+        maxSupportedTransactionVersion: 0,
+        commitment: 'confirmed'
+      });
+      if (!tx || !tx.meta) continue;
+      const mint = findNewMint(tx);
+      if (!mint) continue;
+      if (!checkCreatorCommitment(tx)) { stats.skipped++; continue; }
+      await validateAndSnipe(mint);
+    } catch(e) {}
+    // 600ms entre chaque requete = max ~1.6 req/sec
+    await new Promise(r => setTimeout(r, 600));
+  }
+  processingQueue = false;
+}
+
 // Stats avec gains/pertes reels
 const stats = {
   total: 0,
@@ -413,7 +441,7 @@ async function startSniper() {
         try { await connection.removeOnLogsListener(subId); } catch(e) {}
         subId = null;
       }
-      subId = connection.onLogs(pumpKey, async (logs) => {
+      subId = connection.onLogs(pumpKey, (logs) => {
         if (logs.err) return;
         const isCreate = logs.logs.some(l =>
           l.includes('InitializeMint') ||
@@ -423,18 +451,9 @@ async function startSniper() {
         if (!isCreate) return;
         if (processedSigs.has(logs.signature)) return;
         processedSigs.add(logs.signature);
-
-        try {
-          const tx = await connection.getParsedTransaction(logs.signature, {
-            maxSupportedTransactionVersion: 0,
-            commitment: 'confirmed'
-          });
-          if (!tx || !tx.meta) return;
-          const mint = findNewMint(tx);
-          if (!mint) return;
-          if (!checkCreatorCommitment(tx)) { stats.skipped++; return; }
-          await validateAndSnipe(mint);
-        } catch(e) {}
+        // Ajoute a la file — traitement cadence a 1 req/600ms
+        txQueue.push({ signature: logs.signature, timestamp: Date.now() });
+        processTxQueue();
       }, 'confirmed');
 
       retryDelay = 3000;
