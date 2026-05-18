@@ -33,9 +33,15 @@ const MAX_ENTRY_MC = 40000; // MC maximum ($40k)
 const MIN_LIQUIDITY = 2000; // liquidite minimum ($2k)
 const MIN_BUYS_5M = 10;     // achats actifs sur 5 min
 
+// Dip — attente d'une correction avant achat
+const DIP_PCT = 15;           // attendre -15% depuis le MC filtre
+const MAX_DIP_WAIT_SEC = 180; // abandonner apres 3 min si pas de dip
+const MAX_RISE_PCT = 60;      // si +60% depuis filtre = rate le train
+
 const sniped = new Set();
 const positions = {};
-const watchlist = {}; // tokens detectes, en cours de surveillance
+const watchlist = {};    // tokens en surveillance (attente 60s)
+const dipWatchlist = {}; // tokens filtres, en attente du dip
 
 const txQueue = [];
 let processingQueue = false;
@@ -358,23 +364,81 @@ async function checkWatchlist() {
         continue;
       }
 
-      // Passe tous les filtres — achat !
+      // Passe tous les filtres — attente du dip avant achat
       delete watchlist[mint];
-      if (sniped.has(mint) || positions[mint]) continue;
-      if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
+      if (sniped.has(mint) || positions[mint] || dipWatchlist[mint]) continue;
 
-      console.log('[GO] ' + name + ' | $' + mc.toLocaleString() + ' MC | Liq $' + Math.round(liquidity) + ' | ' + buys5m + ' buys/5m | ' + priceChange5m + '%/5m | age ' + Math.round(ageSec) + 's');
+      const dipTargetMC = Math.round(mc * (1 - DIP_PCT / 100));
+      dipWatchlist[mint] = { filterMC: mc, detectedAt: Date.now(), name };
+
+      console.log('[FILTRE OK] ' + name + ' | $' + mc.toLocaleString() + ' MC | Attente dip -' + DIP_PCT + '% → <$' + dipTargetMC.toLocaleString());
       await sendTelegram(
         '🔍 FILTRE PASSE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 MC : $' + mc.toLocaleString() + '\n'
+        + '📊 MC au filtre : $' + mc.toLocaleString() + '\n'
         + '💧 Liquidite : $' + Math.round(liquidity).toLocaleString() + '\n'
         + '📈 Buys 5m : ' + buys5m + '\n'
         + '📊 Variation 5m : ' + priceChange5m + '%\n'
-        + '⏱ Age : ' + Math.round(ageSec) + ' secondes\n==================\n'
-        + '⚡ Achat en cours...'
+        + '⏱ Age : ' + Math.round(ageSec) + 's\n==================\n'
+        + '⏳ Attente correction -' + DIP_PCT + '%\n'
+        + '   Cible achat : <$' + dipTargetMC.toLocaleString() + ' MC\n'
+        + '   Timeout : ' + MAX_DIP_WAIT_SEC + 's'
       );
-      await snipe(mint, name, mc);
+    } catch(e) {}
+
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+
+// Surveille les tokens filtres et achete sur le dip
+async function checkDipWatchlist() {
+  const now = Date.now();
+  const mints = Object.keys(dipWatchlist);
+  if (mints.length === 0) return;
+
+  for (const mint of mints) {
+    if (!dipWatchlist[mint]) continue;
+    const info = dipWatchlist[mint];
+    const ageSec = (now - info.detectedAt) / 1000;
+
+    // Timeout — pas de dip, on abandonne
+    if (ageSec > MAX_DIP_WAIT_SEC) {
+      delete dipWatchlist[mint];
+      console.log('[DIP] ' + info.name + ' — timeout ' + Math.round(ageSec) + 's, pas de dip');
+      continue;
+    }
+
+    try {
+      const { mc } = await getTokenInfo(mint);
+      if (!mc) continue;
+
+      // Trop monte depuis le filtre — rate le train
+      if (mc > info.filterMC * (1 + MAX_RISE_PCT / 100)) {
+        delete dipWatchlist[mint];
+        stats.skipped++;
+        console.log('[DIP] ' + info.name + ' — trop monte $' + mc.toLocaleString() + ' (+' + Math.round((mc/info.filterMC-1)*100) + '%)');
+        continue;
+      }
+
+      const dipPct = Math.round((mc / info.filterMC - 1) * 100);
+      console.log('[DIP WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC | ' + dipPct + '% depuis filtre');
+
+      // Dip dans la zone achat (-15% a -50%)
+      if (dipPct <= -DIP_PCT && dipPct >= -50) {
+        delete dipWatchlist[mint];
+        if (sniped.has(mint) || positions[mint]) continue;
+        if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
+
+        console.log('[GO DIP] ' + info.name + ' | Dip ' + dipPct + '% | $' + mc.toLocaleString() + ' MC (filtre $' + info.filterMC.toLocaleString() + ')');
+        await sendTelegram(
+          '📉 DIP DETECTE — ACHAT\n==================\n'
+          + '🪙 ' + info.name + '\n'
+          + '📊 MC au filtre : $' + info.filterMC.toLocaleString() + '\n'
+          + '📉 MC au dip : $' + mc.toLocaleString() + ' (' + dipPct + '%)\n==================\n'
+          + '⚡ Achat au prix bas en cours...'
+        );
+        await snipe(mint, info.name, mc);
+      }
     } catch(e) {}
 
     await new Promise(r => setTimeout(r, 200));
@@ -451,6 +515,8 @@ async function startSniper() {
 
   // Verifier la watchlist toutes les 5 secondes
   setInterval(() => checkWatchlist(), 5000);
+  // Verifier les dips toutes les 5 secondes
+  setInterval(() => checkDipWatchlist(), 5000);
 
   console.log('[SNIPER] Actif — filtres 60s — TP x2 — SL -' + SL_PCT + '%');
   await sendTelegram(
