@@ -201,7 +201,7 @@ async function monitorSnipe(mint, name, buyTime) {
           await sendTelegram(
             '🔴 ABANDON\n==================\n🪙 ' + name + '\nNon indexe — rug probable\n==================\nPERTE ESTIMEE : -$' + lossUSD
           );
-          if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+          if (stats.total % 10 === 0) sendSniperReport();
         }
         return;
       }
@@ -235,7 +235,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+        if (stats.total % 10 === 0) sendSniperReport();
         return;
       }
 
@@ -261,7 +261,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '📊 https://dexscreener.com/solana/' + mint + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+        if (stats.total % 10 === 0) sendSniperReport();
         return;
       }
 
@@ -281,7 +281,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+        if (stats.total % 10 === 0) sendSniperReport();
         return;
       }
 
@@ -300,7 +300,7 @@ async function monitorSnipe(mint, name, buyTime) {
           + (gainPct >= 0 ? '💰 Gain' : '📉 Perte') + ' : ' + (gainPct >= 0 ? '+' : '') + gainPct + '% (' + (gainPct >= 0 ? '+$' : '-$') + Math.abs(gainUSD).toFixed(0) + ')\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle requise')
         );
-        if (stats.total === 10 || stats.total === 20 || stats.total === 30) sendSniperReport();
+        if (stats.total % 10 === 0) sendSniperReport();
       }
     } catch(e) {}
   }, MONITOR_INTERVAL);
