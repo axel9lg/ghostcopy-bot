@@ -23,7 +23,7 @@ const MAX_ENTRY_MC = 5000;        // zone d'entree : $5,000 MC maximum
 const SL_PCT = 20;                // SL -20% — coupe les rugs plus vite
 const TRAILING_ACTIVATE_PCT = 25; // trailing actif des +25% (avant c'etait +30%)
 const TRAILING_PCT = 20;          // trail -20% depuis pic (avant -15%)
-const MIN_CREATOR_SOL = 0.3;      // createur doit avoir investi min 0.3 SOL
+const MIN_CREATOR_SOL = 0.05;     // createur doit avoir investi min 0.05 SOL
 const MIN_LIQUIDITY = 500;
 const JITO_FEE = 500000;
 const MONITOR_INTERVAL = 5000;
@@ -48,16 +48,18 @@ async function processTxQueue() {
     // Ignore si le token a plus de 25 secondes (trop tard pour sniper)
     if (Date.now() - timestamp > 25000) continue;
     try {
+      console.log('[QUEUE] Traitement tx : ' + signature.slice(0, 12) + '...');
       const tx = await connection.getParsedTransaction(signature, {
         maxSupportedTransactionVersion: 0,
         commitment: 'confirmed'
       });
-      if (!tx || !tx.meta) continue;
+      if (!tx || !tx.meta) { console.log('[QUEUE] Tx vide — skip'); continue; }
       const mint = findNewMint(tx);
-      if (!mint) continue;
+      if (!mint) { console.log('[QUEUE] Pas de mint pump — skip'); continue; }
       if (!checkCreatorCommitment(tx)) { stats.skipped++; continue; }
+      console.log('[QUEUE] Mint valide : ' + mint.slice(0, 12) + '...');
       await validateAndSnipe(mint);
-    } catch(e) {}
+    } catch(e) { console.log('[QUEUE] Erreur : ' + e.message); }
     // 600ms entre chaque requete = max ~1.6 req/sec
     await new Promise(r => setTimeout(r, 600));
   }
