@@ -24,12 +24,12 @@ const MONITOR_INTERVAL = 5000;
 const MAX_OPEN = 3;
 
 // Filtres — donnees Pump.fun directes (pas de delai DexScreener)
-const MIN_AGE_SEC = 30;         // au moins 30s (evite les rugs immediats)
-const MAX_AGE_SEC = 180;        // max 3 minutes
-const MIN_MC = 8000;            // MC minimum $8k
-const MAX_MC = 60000;           // MC maximum $60k (pas trop tard)
-const MAX_LAST_TRADE_SEC = 20;  // token doit avoir trade dans les 20 dernieres secondes
-const SCAN_INTERVAL = 8000;     // scan Pump.fun toutes les 8 secondes
+const MIN_AGE_SEC = 15;         // au moins 15s (evite les rugs immediats)
+const MAX_AGE_SEC = 300;        // max 5 minutes
+const MIN_MC = 5000;            // MC minimum $5k
+const MAX_MC = 80000;           // MC maximum $80k
+const MAX_LAST_TRADE_SEC = 60;  // trade dans les 60 dernieres secondes
+const SCAN_INTERVAL = 8000;     // scan toutes les 8 secondes
 
 // Jito
 const JITO_ENDPOINTS = [
@@ -64,15 +64,24 @@ async function sendTelegram(msg) {
   } catch(e) {}
 }
 
-// Pump.fun API — donnees en temps reel, pas de delai
+// Pump.fun API — deux listes : plus recents + plus actifs
 async function getPumpTokens() {
   try {
-    const r = await fetch(
-      'https://frontend-api.pump.fun/coins?sort=last_trade_unix_time&order=DESC&offset=0&limit=50',
-      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
-    );
-    if (!r.ok) return [];
-    return await r.json();
+    const [r1, r2] = await Promise.all([
+      fetch('https://frontend-api.pump.fun/coins?sort=created_timestamp&order=DESC&offset=0&limit=100',
+        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }),
+      fetch('https://frontend-api.pump.fun/coins?sort=last_trade_unix_time&order=DESC&offset=0&limit=100',
+        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } })
+    ]);
+    const list1 = r1.ok ? await r1.json() : [];
+    const list2 = r2.ok ? await r2.json() : [];
+    // Fusionner sans doublons
+    const seen = new Set();
+    const merged = [];
+    for (const coin of [...list1, ...list2]) {
+      if (coin.mint && !seen.has(coin.mint)) { seen.add(coin.mint); merged.push(coin); }
+    }
+    return merged;
   } catch(e) { return []; }
 }
 
@@ -302,31 +311,30 @@ async function scanPumpFun() {
     }
 
     const now = Date.now() / 1000;
-    let candidates = 0;
+    let total = 0, tooYoung = 0, tooOld = 0, mcTooLow = 0, mcTooHigh = 0, inactive = 0, candidates = 0;
 
     for (const coin of tokens) {
       if (!coin.mint || sniped.has(coin.mint) || positions[coin.mint]) continue;
+      total++;
 
-      const ageSec = now - (coin.created_timestamp / 1000);
+      // Pump.fun: created_timestamp en millisecondes
+      const createdSec = coin.created_timestamp > 1e12 ? coin.created_timestamp / 1000 : coin.created_timestamp;
+      const ageSec = now - createdSec;
       const mc = Math.round(coin.usd_market_cap || 0);
       const lastTradeSec = now - (coin.last_trade_unix_time || 0);
       const name = coin.symbol || coin.name || coin.mint.slice(0, 8);
 
-      // Filtres
-      if (ageSec < MIN_AGE_SEC) continue;           // trop frais
-      if (ageSec > MAX_AGE_SEC) continue;           // fenetre fermee
-      if (mc < MIN_MC) continue;                    // MC trop bas
-      if (mc > MAX_MC) continue;                    // MC trop haut
-      if (lastTradeSec > MAX_LAST_TRADE_SEC) continue; // pas d activite recente
-      if (coin.complete) continue;                  // bonding curve terminee
+      if (ageSec < MIN_AGE_SEC) { tooYoung++; continue; }
+      if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
+      if (mc < MIN_MC) { mcTooLow++; continue; }
+      if (mc > MAX_MC) { mcTooHigh++; continue; }
+      if (lastTradeSec > MAX_LAST_TRADE_SEC) { inactive++; continue; }
+      if (coin.complete) continue;
 
       candidates++;
-      console.log('[CANDIDAT] ' + name + ' | $' + mc.toLocaleString() + ' MC | age ' + Math.round(ageSec) + 's | dernier trade il y a ' + Math.round(lastTradeSec) + 's');
+      console.log('[CANDIDAT] ' + name + ' | $' + mc.toLocaleString() + ' MC | age ' + Math.round(ageSec) + 's | trade il y a ' + Math.round(lastTradeSec) + 's');
 
-      if (Object.keys(positions).length >= MAX_OPEN) {
-        stats.skipped++;
-        continue;
-      }
+      if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
 
       await sendTelegram(
         '🔍 CANDIDAT TROUVE\n==================\n'
@@ -337,14 +345,10 @@ async function scanPumpFun() {
         + '⚡ Achat via Jito...'
       );
       await snipe(coin.mint, name, mc);
-
-      // Un achat a la fois par scan
       break;
     }
 
-    if (candidates === 0) {
-      console.log('[SCAN] ' + tokens.length + ' tokens analyses — 0 candidat (filtres trop stricts ou marche calme)');
-    }
+    console.log('[SCAN] ' + total + ' tokens | trop frais:' + tooYoung + ' trop vieux:' + tooOld + ' MC bas:' + mcTooLow + ' MC haut:' + mcTooHigh + ' inactifs:' + inactive + ' → ' + candidates + ' candidat(s)');
   } catch(e) {
     console.log('[SCAN] Erreur : ' + e.message);
   }
