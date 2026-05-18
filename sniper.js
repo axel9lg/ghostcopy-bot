@@ -493,7 +493,7 @@ async function startSniper() {
   // Re-abonnement toutes les 10 min pour eviter les deconnexions silencieuses
   setInterval(() => subscribe(), 10 * 60 * 1000);
 
-  console.log('[WS] Sniper v3 actif — WebSocket Helius — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
+  console.log('[WS] Sniper actif — achat immediat tous les tokens — TP x2 +' + TP_PCT + '%');
   await sendTelegram(
     '🎯 SNIPER v3 DEMARRE\n==================\n'
     + '📡 Tous les nouveaux tokens Pump.fun\n'
