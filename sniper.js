@@ -470,15 +470,15 @@ async function startSniper() {
   // Re-abonnement toutes les 10 min pour eviter les deconnexions silencieuses
   setInterval(() => subscribe(), 10 * 60 * 1000);
 
-  console.log('[POLL] Sniper v3 actif — polling toutes les 3s — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
+  console.log('[WS] Sniper v3 actif — WebSocket Helius — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
     '🎯 SNIPER v3 DEMARRE\n==================\n'
-    + '📡 Polling Pump.fun (HTTP, plus de 429)\n'
+    + '📡 WebSocket Helius + HTTP Alchemy\n'
     + '👤 Filtre createur : min ' + MIN_CREATOR_SOL + ' SOL investi\n'
     + '📊 Zone entree : $' + MIN_ENTRY_MC.toLocaleString() + ' — $' + MAX_ENTRY_MC.toLocaleString() + ' MC\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
     + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
-    + '🛑 SL : -' + SL_PCT + '% (coupe plus vite les rugs)\n'
+    + '🛑 SL : -' + SL_PCT + '%\n'
     + '⏱ Timeout : 8 min\n'
     + '🔢 Max positions : ' + MAX_OPEN + '\n'
     + '📊 Rapports a 10, 20, 30 snipes\n'
