@@ -14,34 +14,27 @@ const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_K
 const SOL = 'So11111111111111111111111111111111111111112';
 const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
-// CONFIG
+// CONFIG — strategie pic $25k → dip -50% → TP +50%
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 100;               // x2 depuis l'entree
-const SL_PCT = 30;
-const TRAILING_ACTIVATE_PCT = 50;
-const TRAILING_PCT = 20;
+const MIN_PEAK_MC = 25000;        // token doit atteindre $25k MC
+const DIP_FROM_PEAK = 50;         // acheter a -50% depuis le pic
+const TP_PCT = 50;                // vendre a +50% depuis l entree
+const SL_PCT = 25;                // stop loss -25%
+const TRAILING_ACTIVATE_PCT = 25; // trailing actif des +25%
+const TRAILING_PCT = 15;          // coupe -15% depuis pic
 const JITO_FEE = 500000;
 const MONITOR_INTERVAL = 5000;
 const MAX_OPEN = 3;
-
-// Filtres qualite (token doit survivre 60s et passer ces criteres)
-const MIN_WAIT_SEC = 60;    // survie minimum avant d'acheter
-const MAX_WAIT_SEC = 300;   // abandon apres 5 minutes
-const MIN_MC = 5000;        // MC minimum ($5k)
-const MAX_ENTRY_MC = 40000; // MC maximum ($40k)
-const MIN_LIQUIDITY = 2000; // liquidite minimum ($2k)
-const MIN_BUYS_5M = 10;     // achats actifs sur 5 min
-
-// Dip — attente d'une correction avant achat
-const DIP_PCT = 15;           // attendre -15% depuis le MC filtre
-const MAX_DIP_WAIT_SEC = 180; // abandonner apres 3 min si pas de dip
-const MAX_RISE_PCT = 60;      // si +60% depuis filtre = rate le train
+const MAX_WATCH_MIN = 30;         // abandonner si le token n atteint pas $25k en 30 min
+const MIN_LIQUIDITY = 1500;       // liquidite minimum au moment d acheter
 
 const sniped = new Set();
 const positions = {};
-const watchlist = {};    // tokens en surveillance (attente 60s)
-const dipWatchlist = {}; // tokens filtres, en attente du dip
+
+// Un seul watchlist — surveille le pic et attend le dip
+const watchlist = {};
+// { mint: { detectedAt, name, peakMC, peakReached, peakAlertSent } }
 
 const txQueue = [];
 let processingQueue = false;
@@ -73,16 +66,12 @@ async function getTokenInfo(mint) {
         mc: p.fdv || 0,
         price: parseFloat(p.priceUsd) || 0,
         name: p.baseToken?.symbol || mint.slice(0, 8),
-        liquidity: p.liquidity?.usd || 0,
-        buys5m: p.txns?.m5?.buys || 0,
-        sells5m: p.txns?.m5?.sells || 0,
-        priceChange5m: p.priceChange?.m5 || 0,
-        volume5m: p.volume?.m5 || 0
+        liquidity: p.liquidity?.usd || 0
       };
     }
-    return { mc: 0, price: 0, name: mint.slice(0, 8), liquidity: 0, buys5m: 0, sells5m: 0, priceChange5m: 0, volume5m: 0 };
+    return { mc: 0, price: 0, name: mint.slice(0, 8), liquidity: 0 };
   } catch(e) {
-    return { mc: 0, price: 0, name: mint.slice(0, 8), liquidity: 0, buys5m: 0, sells5m: 0, priceChange5m: 0, volume5m: 0 };
+    return { mc: 0, price: 0, name: mint.slice(0, 8), liquidity: 0 };
   }
 }
 
@@ -121,30 +110,27 @@ async function sendSniperReport() {
   const net = stats.totalGainUSD - stats.totalLossUSD;
   const netEmoji = net >= 0 ? '✅' : '🔴';
   const fastest = stats.fastestWinMs < Infinity ? Math.round(stats.fastestWinMs / 1000) + 's (' + stats.fastestToken + ')' : 'N/A';
-
   let recommandation;
   if (winRate >= 50 && net > 0) recommandation = '💹 RENTABLE — Tu peux augmenter la mise';
-  else if (winRate >= 35 && net >= 0) recommandation = '⚖️ NEUTRE — Continue pour plus de donnees';
+  else if (winRate >= 35) recommandation = '⚖️ NEUTRE — Continue pour plus de donnees';
   else recommandation = '⚠️ NEGATIF — Le marche est difficile, patience';
 
   await sendTelegram(
     '📊 BILAN ' + stats.total + ' SNIPES\n'
     + '==================\n'
-    + '🏆 Wins : ' + stats.wins + '\n'
-    + '🔴 Losses : ' + stats.losses + '\n'
+    + '🏆 Wins : ' + stats.wins + ' | 🔴 Losses : ' + stats.losses + '\n'
     + '📊 Win rate : ' + winRate + '%\n'
     + '🚫 Ignores : ' + stats.skipped + '\n'
     + '==================\n'
-    + '💰 Mise par trade : $' + MISE_USD + '\n'
-    + '📈 Gains reels : +$' + stats.totalGainUSD.toFixed(0) + '\n'
-    + '📉 Pertes reelles : -$' + stats.totalLossUSD.toFixed(0) + '\n'
-    + netEmoji + ' NET REEL : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n'
+    + '💰 Mise : $' + MISE_USD + ' | TP : +' + TP_PCT + '% | SL : -' + SL_PCT + '%\n'
+    + '📈 Gains : +$' + stats.totalGainUSD.toFixed(0) + '\n'
+    + '📉 Pertes : -$' + stats.totalLossUSD.toFixed(0) + '\n'
+    + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n'
     + '==================\n'
     + '🥇 Meilleur gain : +' + stats.bestGainPct + '% (' + (stats.bestToken || 'N/A') + ')\n'
     + '⚡ Win le plus rapide : ' + fastest + '\n'
     + '==================\n'
-    + recommandation + '\n'
-    + '=================='
+    + recommandation
   );
 }
 
@@ -166,7 +152,7 @@ async function monitorSnipe(mint, name, buyTime) {
           stats.losses++;
           stats.totalLossUSD += lossUSD;
           delete positions[mint];
-          await sendTelegram('🔴 ABANDON\n==================\n🪙 ' + name + '\nPlus de liquidite\n==================\nPERTE ESTIMEE : -$' + lossUSD);
+          await sendTelegram('🔴 ABANDON\n🪙 ' + name + '\nPlus de liquidite\nPERTE ESTIMEE : -$' + lossUSD);
           if (stats.total % 10 === 0) sendSniperReport();
         }
         return;
@@ -180,8 +166,7 @@ async function monitorSnipe(mint, name, buyTime) {
 
       const gainPct = Math.round((mc / entryMC - 1) * 100);
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
-      const trailingStatus = trailingActive ? ' [TRAILING ON]' : ' [SL ' + SL_PCT + '%]';
-      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' MC | ' + (gainPct >= 0 ? '+' : '') + gainPct + '% | Pic $' + peak.toLocaleString() + trailingStatus);
+      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' MC | ' + (gainPct >= 0 ? '+' : '') + gainPct + '% | Pic $' + peak.toLocaleString() + (trailingActive ? ' [TRAIL]' : ''));
 
       // TRAILING STOP
       if (trailingActive && mc <= peak * (1 - TRAILING_PCT / 100)) {
@@ -204,7 +189,7 @@ async function monitorSnipe(mint, name, buyTime) {
         return;
       }
 
-      // TAKE PROFIT x2
+      // TAKE PROFIT +50%
       if (gainPct >= TP_PCT) {
         clearInterval(interval);
         const gainUSD = (gainPct / 100) * MISE_USD;
@@ -216,7 +201,7 @@ async function monitorSnipe(mint, name, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint);
         await sendTelegram(
-          '🏆 x2 ATTEINT\n==================\n🪙 ' + name + '\n'
+          '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
           + '💰 Gain : +' + gainPct + '% (+$' + gainUSD.toFixed(0) + ')\n'
@@ -285,14 +270,18 @@ async function snipe(mint, name, entryMC) {
       stats.total++;
       sniped.add(mint);
 
+      const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+      const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
+
       await sendTelegram(
         '🎯 SNIPE EXECUTE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 MC entree : $' + entryMC.toLocaleString() + '\n==================\n'
+        + '📉 Achat au dip : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '🎯 TP : x2 (+' + TP_PCT + '%) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
+        + '🎯 TP : +' + TP_PCT + '% → $' + tpMC.toLocaleString() + ' MC (+$' + (MISE_USD * TP_PCT / 100) + ')\n'
+        + '🛑 SL : -' + SL_PCT + '% → $' + slMC.toLocaleString() + ' MC (-$' + (MISE_USD * SL_PCT / 100) + ')\n'
         + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
-        + '🛑 SL : -' + SL_PCT + '%\n==================\n'
+        + '==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint
       );
@@ -307,7 +296,7 @@ async function snipe(mint, name, entryMC) {
   }
 }
 
-// Verifie les tokens en surveillance toutes les 5 secondes
+// Surveille les tokens — attend le pic $25k puis le dip -50%
 async function checkWatchlist() {
   const now = Date.now();
   const mints = Object.keys(watchlist);
@@ -316,126 +305,69 @@ async function checkWatchlist() {
   for (const mint of mints) {
     if (!watchlist[mint]) continue;
     const info = watchlist[mint];
-    const ageSec = (now - info.detectedAt) / 1000;
+    const ageMin = (now - info.detectedAt) / 60000;
 
-    // Pas encore assez vieux
-    if (ageSec < MIN_WAIT_SEC) continue;
-
-    // Trop vieux — abandonner
-    if (ageSec > MAX_WAIT_SEC) {
+    // Timeout — le token n a pas atteint $25k en 30 min
+    if (ageMin > MAX_WATCH_MIN) {
       delete watchlist[mint];
-      stats.skipped++;
-      console.log('[EXPIRE] ' + info.name + ' — abandon apres ' + Math.round(ageSec) + 's');
+      console.log('[EXPIRE] ' + info.name + ' — pas atteint $' + MIN_PEAK_MC.toLocaleString() + ' en ' + MAX_WATCH_MIN + 'min');
       continue;
     }
 
     try {
-      const { mc, name, liquidity, buys5m, priceChange5m } = await getTokenInfo(mint);
+      const { mc, name, liquidity } = await getTokenInfo(mint);
       if (name && name !== mint.slice(0, 8)) info.name = name;
-
-      // Pas encore indexe sur DexScreener
       if (!mc) continue;
 
-      // MC trop haut — rate la fenetre
-      if (mc > MAX_ENTRY_MC) {
+      // Suivi du pic
+      if (mc > info.peakMC) {
+        info.peakMC = mc;
+
+        // Vient d atteindre $25k pour la premiere fois
+        if (mc >= MIN_PEAK_MC && !info.peakReached) {
+          info.peakReached = true;
+          console.log('[PIC] ' + info.name + ' a atteint $' + mc.toLocaleString() + ' MC — attente dip -' + DIP_FROM_PEAK + '%...');
+          await sendTelegram(
+            '📈 PIC $' + MIN_PEAK_MC.toLocaleString() + ' ATTEINT\n==================\n'
+            + '🪙 ' + info.name + '\n'
+            + '📊 Pic actuel : $' + mc.toLocaleString() + ' MC\n==================\n'
+            + '⏳ Attente dip -' + DIP_FROM_PEAK + '%\n'
+            + '   Cible achat : <$' + Math.round(mc * (1 - DIP_FROM_PEAK / 100)).toLocaleString() + ' MC'
+          );
+        }
+      }
+
+      // Pas encore atteint le pic minimum
+      if (!info.peakReached) {
+        console.log('[WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC | Pic $' + info.peakMC.toLocaleString() + ' (cible $' + MIN_PEAK_MC.toLocaleString() + ')');
+        continue;
+      }
+
+      // Calcul du dip depuis le pic
+      const dipPct = Math.round((mc / info.peakMC - 1) * 100);
+      console.log('[DIP WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC | Pic $' + info.peakMC.toLocaleString() + ' | ' + dipPct + '% depuis pic');
+
+      // Dip de -50% depuis le pic — achat !
+      if (dipPct <= -DIP_FROM_PEAK) {
+        if (liquidity < MIN_LIQUIDITY) {
+          console.log('[SKIP] ' + info.name + ' — dip ok mais liquidite trop faible ($' + Math.round(liquidity) + ')');
+          delete watchlist[mint];
+          stats.skipped++;
+          continue;
+        }
+
         delete watchlist[mint];
-        stats.skipped++;
-        console.log('[SKIP] ' + info.name + ' — MC trop haut $' + mc.toLocaleString());
-        continue;
-      }
-
-      // Filtres qualite
-      if (mc < MIN_MC) {
-        console.log('[WAIT] ' + info.name + ' | MC trop bas $' + mc);
-        continue;
-      }
-      if (liquidity < MIN_LIQUIDITY) {
-        console.log('[WAIT] ' + info.name + ' | Liquidite insuffisante $' + Math.round(liquidity));
-        continue;
-      }
-      if (buys5m < MIN_BUYS_5M) {
-        console.log('[WAIT] ' + info.name + ' | Activite faible ' + buys5m + ' buys/5m');
-        continue;
-      }
-      if (priceChange5m < -40) {
-        delete watchlist[mint];
-        stats.skipped++;
-        console.log('[SKIP] ' + info.name + ' — chute ' + priceChange5m + '%/5m (rug probable)');
-        continue;
-      }
-
-      // Passe tous les filtres — attente du dip avant achat
-      delete watchlist[mint];
-      if (sniped.has(mint) || positions[mint] || dipWatchlist[mint]) continue;
-
-      const dipTargetMC = Math.round(mc * (1 - DIP_PCT / 100));
-      dipWatchlist[mint] = { filterMC: mc, detectedAt: Date.now(), name };
-
-      console.log('[FILTRE OK] ' + name + ' | $' + mc.toLocaleString() + ' MC | Attente dip -' + DIP_PCT + '% → <$' + dipTargetMC.toLocaleString());
-      await sendTelegram(
-        '🔍 FILTRE PASSE\n==================\n'
-        + '🪙 ' + name + '\n'
-        + '📊 MC au filtre : $' + mc.toLocaleString() + '\n'
-        + '💧 Liquidite : $' + Math.round(liquidity).toLocaleString() + '\n'
-        + '📈 Buys 5m : ' + buys5m + '\n'
-        + '📊 Variation 5m : ' + priceChange5m + '%\n'
-        + '⏱ Age : ' + Math.round(ageSec) + 's\n==================\n'
-        + '⏳ Attente correction -' + DIP_PCT + '%\n'
-        + '   Cible achat : <$' + dipTargetMC.toLocaleString() + ' MC\n'
-        + '   Timeout : ' + MAX_DIP_WAIT_SEC + 's'
-      );
-    } catch(e) {}
-
-    await new Promise(r => setTimeout(r, 200));
-  }
-}
-
-// Surveille les tokens filtres et achete sur le dip
-async function checkDipWatchlist() {
-  const now = Date.now();
-  const mints = Object.keys(dipWatchlist);
-  if (mints.length === 0) return;
-
-  for (const mint of mints) {
-    if (!dipWatchlist[mint]) continue;
-    const info = dipWatchlist[mint];
-    const ageSec = (now - info.detectedAt) / 1000;
-
-    // Timeout — pas de dip, on abandonne
-    if (ageSec > MAX_DIP_WAIT_SEC) {
-      delete dipWatchlist[mint];
-      console.log('[DIP] ' + info.name + ' — timeout ' + Math.round(ageSec) + 's, pas de dip');
-      continue;
-    }
-
-    try {
-      const { mc } = await getTokenInfo(mint);
-      if (!mc) continue;
-
-      // Trop monte depuis le filtre — rate le train
-      if (mc > info.filterMC * (1 + MAX_RISE_PCT / 100)) {
-        delete dipWatchlist[mint];
-        stats.skipped++;
-        console.log('[DIP] ' + info.name + ' — trop monte $' + mc.toLocaleString() + ' (+' + Math.round((mc/info.filterMC-1)*100) + '%)');
-        continue;
-      }
-
-      const dipPct = Math.round((mc / info.filterMC - 1) * 100);
-      console.log('[DIP WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC | ' + dipPct + '% depuis filtre');
-
-      // Dip dans la zone achat (-15% a -50%)
-      if (dipPct <= -DIP_PCT && dipPct >= -50) {
-        delete dipWatchlist[mint];
         if (sniped.has(mint) || positions[mint]) continue;
         if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
 
-        console.log('[GO DIP] ' + info.name + ' | Dip ' + dipPct + '% | $' + mc.toLocaleString() + ' MC (filtre $' + info.filterMC.toLocaleString() + ')');
+        console.log('[GO] ' + info.name + ' | Dip ' + dipPct + '% | Pic $' + info.peakMC.toLocaleString() + ' → Achat $' + mc.toLocaleString());
         await sendTelegram(
-          '📉 DIP DETECTE — ACHAT\n==================\n'
+          '📉 DIP -' + DIP_FROM_PEAK + '% DETECTE — ACHAT\n==================\n'
           + '🪙 ' + info.name + '\n'
-          + '📊 MC au filtre : $' + info.filterMC.toLocaleString() + '\n'
-          + '📉 MC au dip : $' + mc.toLocaleString() + ' (' + dipPct + '%)\n==================\n'
-          + '⚡ Achat au prix bas en cours...'
+          + '📈 Pic : $' + info.peakMC.toLocaleString() + ' MC\n'
+          + '📉 Dip : $' + mc.toLocaleString() + ' MC (' + dipPct + '% depuis pic)\n'
+          + '💧 Liquidite : $' + Math.round(liquidity).toLocaleString() + '\n==================\n'
+          + '⚡ Achat au creux en cours...'
         );
         await snipe(mint, info.name, mc);
       }
@@ -457,7 +389,6 @@ async function processTxQueue() {
   processingQueue = true;
   while (txQueue.length > 0) {
     const { signature, timestamp } = txQueue.shift();
-    // 30s pour trouver le mint (on n'est pas presse — survie 60s obligatoire)
     if (Date.now() - timestamp > 30000) continue;
     try {
       const tx = await connection.getParsedTransaction(signature, {
@@ -467,8 +398,8 @@ async function processTxQueue() {
       const mint = findNewMint(tx);
       if (!mint || watchlist[mint] || sniped.has(mint)) continue;
 
-      watchlist[mint] = { detectedAt: Date.now(), name: mint.slice(0, 8) };
-      console.log('[WATCH] ' + mint.slice(0, 12) + '... en surveillance (attente ' + MIN_WAIT_SEC + 's)');
+      watchlist[mint] = { detectedAt: Date.now(), name: mint.slice(0, 8), peakMC: 0, peakReached: false };
+      console.log('[NEW] ' + mint.slice(0, 12) + '... detecte — surveillance pic $' + MIN_PEAK_MC.toLocaleString());
     } catch(e) { console.log('[QUEUE] Erreur : ' + e.message); }
     await new Promise(r => setTimeout(r, 600));
   }
@@ -512,25 +443,18 @@ async function startSniper() {
 
   await subscribe();
   setInterval(() => subscribe(), 10 * 60 * 1000);
-
-  // Verifier la watchlist toutes les 5 secondes
   setInterval(() => checkWatchlist(), 5000);
-  // Verifier les dips toutes les 5 secondes
-  setInterval(() => checkDipWatchlist(), 5000);
 
-  console.log('[SNIPER] Actif — filtres 60s — TP x2 — SL -' + SL_PCT + '%');
+  console.log('[SNIPER] Actif — pic $' + MIN_PEAK_MC.toLocaleString() + ' → dip -' + DIP_FROM_PEAK + '% → TP +' + TP_PCT + '%');
   await sendTelegram(
-    '🎯 SNIPER v5 DEMARRE\n==================\n'
-    + '📡 Detection Pump.fun temps reel\n'
-    + '⏱ Survie 60 secondes obligatoire\n==================\n'
+    '🎯 SNIPER v6 DEMARRE\n==================\n'
+    + '📡 Detection Pump.fun temps reel\n==================\n'
+    + '📈 Strategie : pic $' + MIN_PEAK_MC.toLocaleString() + ' MC → dip -' + DIP_FROM_PEAK + '%\n'
     + '💰 Mise : $' + MISE_USD + ' par trade\n'
-    + '🎯 TP : x2 (+' + TP_PCT + '%) → +$' + (MISE_USD * TP_PCT / 100) + '\n'
+    + '🎯 TP : +' + TP_PCT + '% → +$' + (MISE_USD * TP_PCT / 100) + '\n'
     + '🔄 Trailing : actif a +' + TRAILING_ACTIVATE_PCT + '%, coupe -' + TRAILING_PCT + '% du pic\n'
-    + '🛑 SL : -' + SL_PCT + '%\n==================\n'
-    + '🔍 FILTRES QUALITE\n'
-    + '   MC entree : $' + MIN_MC.toLocaleString() + ' - $' + MAX_ENTRY_MC.toLocaleString() + '\n'
-    + '   Liquidite : >$' + MIN_LIQUIDITY.toLocaleString() + '\n'
-    + '   Activite : >' + MIN_BUYS_5M + ' achats/5min\n'
+    + '🛑 SL : -' + SL_PCT + '%\n'
+    + '⏱ Abandon si pas de pic en ' + MAX_WATCH_MIN + ' min\n'
     + '=================='
   );
 }
