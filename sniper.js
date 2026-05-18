@@ -28,7 +28,7 @@ const MIN_LIQUIDITY = 500;
 const JITO_FEE = 500000;
 const MONITOR_INTERVAL = 5000;
 const MAX_OPEN = 3;
-const TIMEOUT_CHECKS = 96;        // 8 min max (96 x 5s)
+const TIMEOUT_CHECKS = 99999;     // pas de timeout — trailing stop et SL gerent la sortie
 const VALIDATION_CHECKS = 12;     // 60s pour valider le token
 const MAX_WATCH = 200;
 
