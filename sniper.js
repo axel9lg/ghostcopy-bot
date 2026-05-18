@@ -400,20 +400,19 @@ async function startSniper() {
     console.log('[POLL] Init erreur : ' + e.message);
   }
 
-  // Polling HTTP toutes les 3s — pas de WebSocket, pas de 429
+  // Polling toutes les 12s — limite les requetes pour rester dans le plan gratuit
   setInterval(async () => {
     try {
-      // Nettoyage memoire periodique
       if (processedSigs.size > 2000) {
         const arr = [...processedSigs];
         processedSigs.clear();
         arr.slice(-1000).forEach(s => processedSigs.add(s));
       }
 
-      const sigs = await connection.getSignaturesForAddress(pumpKey, { limit: 30, commitment: 'confirmed' });
+      const sigs = await connection.getSignaturesForAddress(pumpKey, { limit: 10, commitment: 'confirmed' });
+      const newSigs = sigs.filter(s => !s.err && !processedSigs.has(s.signature));
 
-      for (const sigInfo of sigs) {
-        if (sigInfo.err || processedSigs.has(sigInfo.signature)) continue;
+      for (const sigInfo of newSigs) {
         processedSigs.add(sigInfo.signature);
 
         try {
@@ -441,11 +440,14 @@ async function startSniper() {
 
           await validateAndSnipe(mint);
         } catch(e) {}
+
+        // Pause entre chaque requete pour ne pas surcharger l'API
+        await new Promise(r => setTimeout(r, 400));
       }
     } catch(e) {
       console.log('[POLL] Erreur : ' + e.message);
     }
-  }, 3000);
+  }, 12000);
 
   console.log('[POLL] Sniper v3 actif — polling toutes les 3s — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
