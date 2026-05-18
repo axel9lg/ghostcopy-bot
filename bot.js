@@ -7,7 +7,10 @@ const http = require('http');
 const server = http.createServer((req, res) => { res.writeHead(200); res.end('OK'); });
 server.listen(3000);
 
-const connection = new Connection(process.env.RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=' + process.env.HELIUS_API_KEY, 'confirmed');
+// HTTP (requetes) = Alchemy, WebSocket (events temps reel) = Helius
+const httpUrl = process.env.RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=' + process.env.HELIUS_API_KEY;
+const wsUrl = 'wss://mainnet.helius-rpc.com/?api-key=' + process.env.HELIUS_API_KEY;
+const connection = new Connection(httpUrl, { commitment: 'confirmed', wsEndpoint: wsUrl });
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const TARGETS = (process.env.TARGET_WALLET || '').split(',');
 const SOL = 'So11111111111111111111111111111111111111112';
