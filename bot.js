@@ -381,7 +381,7 @@ async function listenPumpFun() {
       for (const mintInfo of newMints) {
         const mint = mintInfo.mint;
         const { mc, price, name, score } = await getTokenInfo(mint);
-        if (!mc || score < 7) continue;
+        if (!mc) continue;
         if (mc <= ENTRY_MC) {
           await sendTelegram('🆕 NOUVEAU PUMP DETECTE\n==================\n🪙 ' + name + '\n📊 MC : $' + mc.toLocaleString() + '\n💵 PRIX : $' + price + '\n🟢 SCORE : ' + score + '/10\n==================\n⚡ Achat automatique...');
           await executeBuy(mint, name, mc, price, 'PUMP');

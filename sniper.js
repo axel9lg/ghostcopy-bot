@@ -400,54 +400,51 @@ async function startSniper() {
     console.log('[POLL] Init erreur : ' + e.message);
   }
 
-  // Polling toutes les 12s — limite les requetes pour rester dans le plan gratuit
-  setInterval(async () => {
+  // WebSocket — temps reel, Alchemy supporte bien les WS
+  let subId = null;
+  let retryDelay = 3000;
+
+  async function subscribe() {
     try {
-      if (processedSigs.size > 2000) {
-        const arr = [...processedSigs];
-        processedSigs.clear();
-        arr.slice(-1000).forEach(s => processedSigs.add(s));
+      if (subId !== null) {
+        try { await connection.removeOnLogsListener(subId); } catch(e) {}
+        subId = null;
       }
-
-      const sigs = await connection.getSignaturesForAddress(pumpKey, { limit: 10, commitment: 'confirmed' });
-      const newSigs = sigs.filter(s => !s.err && !processedSigs.has(s.signature));
-
-      for (const sigInfo of newSigs) {
-        processedSigs.add(sigInfo.signature);
+      subId = connection.onLogs(pumpKey, async (logs) => {
+        if (logs.err) return;
+        const isCreate = logs.logs.some(l =>
+          l.includes('InitializeMint') ||
+          l.includes('Instruction: Create') ||
+          l.includes('Instruction: Initialize')
+        );
+        if (!isCreate) return;
+        if (processedSigs.has(logs.signature)) return;
+        processedSigs.add(logs.signature);
 
         try {
-          const tx = await connection.getParsedTransaction(sigInfo.signature, {
+          const tx = await connection.getParsedTransaction(logs.signature, {
             maxSupportedTransactionVersion: 0,
             commitment: 'confirmed'
           });
-          if (!tx || !tx.meta) continue;
-
-          const logs = tx.meta.logMessages || [];
-          const isCreate = logs.some(l =>
-            l.includes('InitializeMint') ||
-            l.includes('Instruction: Create') ||
-            l.includes('Instruction: Initialize')
-          );
-          if (!isCreate) continue;
-
+          if (!tx || !tx.meta) return;
           const mint = findNewMint(tx);
-          if (!mint) continue;
-
-          if (!checkCreatorCommitment(tx)) {
-            stats.skipped++;
-            continue;
-          }
-
+          if (!mint) return;
+          if (!checkCreatorCommitment(tx)) { stats.skipped++; return; }
           await validateAndSnipe(mint);
         } catch(e) {}
+      }, 'confirmed');
 
-        // Pause entre chaque requete pour ne pas surcharger l'API
-        await new Promise(r => setTimeout(r, 400));
-      }
+      retryDelay = 3000;
+      console.log('[WS] Connecte a Alchemy (subId: ' + subId + ')');
     } catch(e) {
-      console.log('[POLL] Erreur : ' + e.message);
+      console.log('[WS] Erreur : ' + e.message + ' — retry dans ' + retryDelay / 1000 + 's');
+      setTimeout(() => { retryDelay = Math.min(retryDelay * 2, 30000); subscribe(); }, retryDelay);
     }
-  }, 12000);
+  }
+
+  await subscribe();
+  // Re-abonnement toutes les 10 min pour eviter les deconnexions silencieuses
+  setInterval(() => subscribe(), 10 * 60 * 1000);
 
   console.log('[POLL] Sniper v3 actif — polling toutes les 3s — zone $' + MIN_ENTRY_MC + '-$' + MAX_ENTRY_MC + ' MC');
   await sendTelegram(
