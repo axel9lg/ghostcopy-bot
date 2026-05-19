@@ -569,9 +569,7 @@ async function startSniper() {
     + '📉 Dump -30% : vente urgence immediate\n'
     + '⏰ Max hold : 12 minutes\n'
     + '⚡ Jito bundles actifs\n==================\n'
-    + '🧮 OBJECTIF :\n'
-    + '   5 trades/jour a 45% win\n'
-    + '   → +' + (5 * (tpUSD * 0.45 - slUSD * 0.55)).toFixed(0) + '$/jour estimé\n'
+    + '🧮 OBJECTIF : gagner $200 par trade gagnant\n'
     + '=================='
   );
 
