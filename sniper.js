@@ -48,9 +48,11 @@ const JITO_TIP_ACCOUNTS = [
 
 const sniped = new Set();
 const positions = {};
-const watchlist = {};  // tokens surveilles en approche du seuil $8k
+const watchlist = {};   // tokens $5k-$8k : en approche du call
+const dipTargets = {};  // tokens au-dessus $8k : en attente du dip -50%
 
 const WATCH_MIN_MC = 5000;  // commence a surveiller a $5k
+const DIP_PCT = 50;         // achete quand ca chute de 50% depuis le call
 
 const stats = {
   total: 0, wins: 0, losses: 0, skipped: 0,
@@ -228,12 +230,14 @@ async function sendSniperReport() {
   );
 }
 
-async function monitorSnipe(mint, name, entryMC, buyTime) {
+// tpMCOverride : pour la strategie dip — TP = callMC (prix original du call)
+async function monitorSnipe(mint, name, entryMC, buyTime, tpMCOverride = null) {
   let peak = entryMC;
   let checks = 0;
   let consecutiveZeros = 0;
   let lastMC = entryMC;
-  const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+  const tpMC = tpMCOverride || Math.round(entryMC * (1 + TP_PCT / 100));
+  const gainPctTarget = Math.round((tpMC / entryMC - 1) * 100);
   const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
   const interval = setInterval(async () => {
@@ -314,7 +318,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
       console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' MC | ' + (gainPct >= 0 ? '+' : '') + gainPct + '% | TP $' + tpMC.toLocaleString() + ' | SL $' + slMC.toLocaleString());
 
-      // TAKE PROFIT +10%
+      // TAKE PROFIT — TP au callMC (dip strategy) ou +TP_PCT% (standard)
       if (mc >= tpMC) {
         clearInterval(interval);
         const gainUSD = (gainPct / 100) * MISE_USD;
@@ -360,33 +364,66 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   }, MONITOR_INTERVAL);
 }
 
-// Surveille les tokens en approche $8k et achete au passage du seuil
+// Watchlist $5k-$8k : quand token franchit $8k, enregistrer le call dans dipTargets
 async function checkWatchlist() {
   const entries = Object.entries(watchlist);
   if (entries.length === 0) return;
   for (const [mint, info] of entries) {
-    if (sniped.has(mint) || positions[mint]) { delete watchlist[mint]; continue; }
-    if (Date.now() - info.addedAt > MAX_AGE_SEC * 1000) {
-      delete watchlist[mint];
+    if (sniped.has(mint) || positions[mint] || dipTargets[mint]) { delete watchlist[mint]; continue; }
+    if (Date.now() - info.addedAt > MAX_AGE_SEC * 1000) { delete watchlist[mint]; continue; }
+    try {
+      const coin = await getPumpCoin(mint);
+      const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
+      if (!mc) { delete watchlist[mint]; continue; }
+      if (mc >= MIN_MC) {
+        delete watchlist[mint];
+        const callMC = mc;
+        const buyTarget = Math.round(callMC * (1 - DIP_PCT / 100));
+        dipTargets[mint] = { name: info.name, callMC, buyTarget, detectedAt: Date.now() };
+        console.log('[CALL] ' + info.name + ' franchit $' + callMC.toLocaleString() + ' | achat si dip a $' + buyTarget.toLocaleString());
+        await sendTelegram(
+          '📡 CALL DETECTE\n==================\n'
+          + '🪙 ' + info.name + '\n'
+          + '📊 Call : $' + callMC.toLocaleString() + ' MC\n==================\n'
+          + '⏳ En attente du dip...\n'
+          + '🛒 Achat si : $' + buyTarget.toLocaleString() + ' MC (-' + DIP_PCT + '%)\n'
+          + '🏆 TP : $' + callMC.toLocaleString() + ' MC (+100% = +$' + MISE_USD + ')\n'
+          + '🛑 SL : $' + Math.round(buyTarget * (1 - SL_PCT / 100)).toLocaleString() + ' MC (-' + SL_PCT + '% depuis achat)'
+        );
+      }
+    } catch(e) {}
+  }
+}
+
+// Surveille les dipTargets — achete quand MC dip de -50% depuis le call
+async function monitorDips() {
+  const entries = Object.entries(dipTargets);
+  if (entries.length === 0) return;
+  for (const [mint, info] of entries) {
+    if (sniped.has(mint) || positions[mint]) { delete dipTargets[mint]; continue; }
+    if (Date.now() - info.detectedAt > MAX_AGE_SEC * 1000) {
+      delete dipTargets[mint];
+      console.log('[DIP] Expire : ' + info.name);
       continue;
     }
     try {
       const coin = await getPumpCoin(mint);
       const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
-      if (!mc) { delete watchlist[mint]; continue; }
-      console.log('[WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC → seuil $' + MIN_MC.toLocaleString());
-      if (mc >= MIN_MC) {
-        delete watchlist[mint];
+      if (!mc) { delete dipTargets[mint]; continue; }
+      const dipPct = Math.round((mc / info.callMC - 1) * 100);
+      console.log('[DIP] ' + info.name + ' | $' + mc.toLocaleString() + ' (' + dipPct + '%) | achat a $' + info.buyTarget.toLocaleString());
+      if (mc <= info.buyTarget) {
+        delete dipTargets[mint];
         if (Object.keys(positions).length < MAX_OPEN) {
-          console.log('[ENTRY] ' + info.name + ' franchit $' + mc.toLocaleString() + ' → ACHAT!');
-          await snipe(mint, info.name, mc);
+          console.log('[ENTRY DIP] ' + info.name + ' | achat a $' + mc.toLocaleString() + ' | TP $' + info.callMC.toLocaleString());
+          await snipe(mint, info.name, mc, info.callMC);
         }
       }
     } catch(e) {}
   }
 }
 
-async function snipe(mint, name, entryMC) {
+async function snipe(mint, name, entryMC, tpMCOverride = null) {
   if (positions[mint]) return;
   if (Object.keys(positions).length >= MAX_OPEN) return;
   positions[mint] = { status: 'buying' };
@@ -417,20 +454,22 @@ async function snipe(mint, name, entryMC) {
       stats.total++;
       sniped.add(mint);
 
-      const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+      const tpMC = tpMCOverride || Math.round(entryMC * (1 + TP_PCT / 100));
       const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
+      const gainPctTarget = Math.round((tpMC / entryMC - 1) * 100);
+      const gainUSDTarget = ((gainPctTarget / 100) * MISE_USD).toFixed(0);
 
       await sendTelegram(
         '🎯 SNIPE EXECUTE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 MC entree : $' + entryMC.toLocaleString() + '\n==================\n'
+        + '📊 Achat : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '🎯 TP : +' + TP_PCT + '% → $' + tpMC.toLocaleString() + ' MC (+$' + (MISE_USD * TP_PCT / 100) + ')\n'
-        + '🛑 SL : -' + SL_PCT + '% → $' + slMC.toLocaleString() + ' MC (-$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
+        + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + gainPctTarget + '% = +$' + gainUSDTarget + ')\n'
+        + '🛑 SL : $' + slMC.toLocaleString() + ' MC (-' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint
       );
-      monitorSnipe(mint, name, entryMC, buyTime);
+      monitorSnipe(mint, name, entryMC, buyTime, tpMCOverride);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
@@ -484,25 +523,23 @@ async function scanPumpFun() {
       if (mc < MIN_MC) { mcTooLow++; continue; }
       if (mc > MAX_MC) { mcTooHigh++; continue; }
 
-      candidates++;
-      console.log('[CANDIDAT] ' + name + ' | $' + mc.toLocaleString() + ' MC | age ' + Math.round(ageSec) + 's | trade il y a ' + Math.round(lastTradeSec) + 's');
-
-      if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
-
-      const tpTarget = Math.round(mc * (1 + TP_PCT / 100));
-      const slTarget = Math.round(mc * (1 - SL_PCT / 100));
-      await sendTelegram(
-        '🔍 CANDIDAT TROUVE\n==================\n'
-        + '🪙 ' + name + '\n'
-        + '📊 MC entree : $' + mc.toLocaleString() + '\n'
-        + '⏱ Age : ' + Math.round(ageSec) + 's\n'
-        + '🔄 Dernier trade : il y a ' + Math.round(lastTradeSec) + 's\n==================\n'
-        + '🏆 TP : $' + tpTarget.toLocaleString() + ' MC (+$' + (MISE_USD * TP_PCT / 100) + ')\n'
-        + '🛑 SL : $' + slTarget.toLocaleString() + ' MC (-$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
-        + '⚡ Achat $' + MISE_USD + ' via Jito...'
-      );
-      await snipe(coin.mint, name, mc);
-      break;
+      // Token au-dessus du seuil $8k — enregistrer comme call, attendre le dip -50%
+      if (!dipTargets[coin.mint] && !sniped.has(coin.mint) && !positions[coin.mint]) {
+        const callMC = mc;
+        const buyTarget = Math.round(callMC * (1 - DIP_PCT / 100));
+        dipTargets[coin.mint] = { name, callMC, buyTarget, detectedAt: Date.now() };
+        candidates++;
+        console.log('[CALL] ' + name + ' | $' + callMC.toLocaleString() + ' call | achat si dip a $' + buyTarget.toLocaleString() + ' | TP $' + callMC.toLocaleString());
+        await sendTelegram(
+          '📡 CALL DETECTE\n==================\n'
+          + '🪙 ' + name + ' | age ' + Math.round(ageSec) + 's\n'
+          + '📊 Call : $' + callMC.toLocaleString() + ' MC\n==================\n'
+          + '⏳ En attente du dip...\n'
+          + '🛒 Achat si : $' + buyTarget.toLocaleString() + ' MC (-' + DIP_PCT + '%)\n'
+          + '🏆 TP : $' + callMC.toLocaleString() + ' MC (+100% = +$' + MISE_USD + ')\n'
+          + '🛑 SL : $' + Math.round(buyTarget * (1 - SL_PCT / 100)).toLocaleString() + ' MC (-' + SL_PCT + '% depuis achat)'
+        );
+      }
     }
 
     console.log('[SCAN] ' + total + ' tokens | trop frais:' + tooYoung + ' trop vieux:' + tooOld + ' MC bas:' + mcTooLow + ' MC haut:' + mcTooHigh + ' inactifs:' + inactive + ' → ' + candidates + ' candidat(s)');
@@ -513,19 +550,15 @@ async function scanPumpFun() {
 
 async function startSniper() {
   console.log('[SNIPER] Actif — scan Pump.fun direct — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — TP +' + TP_PCT + '% SL -' + SL_PCT + '%');
-  const tpUSD = MISE_USD * TP_PCT / 100;
-  const slUSD = MISE_USD * SL_PCT / 100;
-  const breakevenWinRate = Math.round(slUSD / (tpUSD + slUSD) * 100);
   await sendTelegram(
-    '🎯 SNIPER v9 DEMARRE\n==================\n'
-    + '📡 Scan Pump.fun direct toutes les ' + (SCAN_INTERVAL / 1000) + 's\n==================\n'
-    + '⏱ Age token : ' + MIN_AGE_SEC + 's - ' + (MAX_AGE_SEC / 60) + 'min\n'
-    + '📊 MC : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + '\n'
-    + '🔄 Activite : trade < ' + MAX_LAST_TRADE_SEC + 's\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' x ' + MAX_OPEN + ' positions\n'
-    + '🏆 TP : +' + TP_PCT + '% = +$' + tpUSD + ' de benefice\n'
-    + '🛑 SL : -' + SL_PCT + '% = -$' + slUSD + ' de perte\n'
-    + '📐 Ratio risque : 2:1 (rentable a partir de ' + breakevenWinRate + '% win)\n==================\n'
+    '🎯 SNIPER v10 DEMARRE\n==================\n'
+    + '📡 Strategie : BUY THE DIP\n==================\n'
+    + '1️⃣ Call detecte a $' + MIN_MC.toLocaleString() + '+\n'
+    + '2️⃣ Achat si dip -' + DIP_PCT + '% (ex: call $8k → achat $4k)\n'
+    + '3️⃣ TP au prix du call (+100% = +$' + MISE_USD + ')\n'
+    + '4️⃣ SL -' + SL_PCT + '% depuis l achat (-$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
+    + '💰 Mise : $' + MISE_USD + ' | ' + MAX_OPEN + ' positions max\n'
+    + '📐 Ratio : 10:1 (call $8k → gain $200 / perte $20)\n==================\n'
     + '💀 Rug : vente urgence en 6s\n'
     + '📉 Dump -30% : vente urgence immediate\n'
     + '⏰ Max hold : 12 minutes\n'
@@ -536,11 +569,13 @@ async function startSniper() {
     + '=================='
   );
 
-  // Scan toutes les 5 secondes pour decouvrir nouveaux tokens
+  // Scan toutes les 5s — decouvre nouveaux calls $8k+
   setInterval(() => scanPumpFun(), SCAN_INTERVAL);
-  // Watchlist verifie toutes les 3 secondes pour saisir le passage a $8k
+  // Watchlist $5k-$8k — surveille le franchissement du call
   setInterval(() => checkWatchlist(), 3000);
-  // Ecoute les commandes Telegram toutes les 3 secondes
+  // DipMonitor — attend le dip -50% pour acheter
+  setInterval(() => monitorDips(), 3000);
+  // Commandes Telegram
   setInterval(() => pollTelegram(), 3000);
   // Premier scan immediat
   scanPumpFun();
