@@ -13,24 +13,24 @@ const connection = new Connection(httpUrl, { commitment: 'confirmed', wsEndpoint
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const SOL = 'So11111111111111111111111111111111111111112';
 
-// CONFIG — $200 mise, +$20 profit cible
+// CONFIG — $200 mise, ratio TP:SL 2:1
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 10;   // +10% = +$20
-const SL_PCT = 10;   // -10% = -$20 (risque/recompense 1:1)
+const TP_PCT = 20;   // +20% = +$40
+const SL_PCT = 10;   // -10% = -$20  → ratio 2:1 (besoin de 34% win rate pour etre rentable)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 3000;  // check toutes les 3s (etait 5s)
-const MAX_OPEN = 3;
-const MAX_HOLD_MS = 10 * 60 * 1000; // force sell apres 10 minutes max
+const MONITOR_INTERVAL = 3000;  // check toutes les 3s
+const MAX_OPEN = 4;
+const MAX_HOLD_MS = 12 * 60 * 1000; // force sell apres 12 minutes max
 
-// Filtres — donnees Pump.fun directes (pas de delai DexScreener)
-const MIN_AGE_SEC = 15;         // au moins 15s (evite les rugs immediats)
-const MAX_AGE_SEC = 300;        // max 5 minutes
-const MIN_MC = 5000;            // MC minimum $5k
-const MAX_MC = 80000;           // MC maximum $80k
-const MAX_LAST_TRADE_SEC = 60;  // trade dans les 60 dernieres secondes
-const SCAN_INTERVAL = 8000;     // scan toutes les 8 secondes
+// Filtres — donnees Pump.fun directes
+const MIN_AGE_SEC = 10;          // au moins 10s
+const MAX_AGE_SEC = 900;         // max 15 minutes
+const MIN_MC = 2000;             // MC minimum $2k
+const MAX_MC = 100000;           // MC maximum $100k
+const MAX_LAST_TRADE_SEC = 120;  // trade dans les 2 dernieres minutes
+const SCAN_INTERVAL = 5000;      // scan toutes les 5 secondes
 
 // Jito
 const JITO_ENDPOINTS = [
@@ -392,13 +392,17 @@ async function scanPumpFun() {
 
       if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
 
+      const tpTarget = Math.round(mc * (1 + TP_PCT / 100));
+      const slTarget = Math.round(mc * (1 - SL_PCT / 100));
       await sendTelegram(
         '🔍 CANDIDAT TROUVE\n==================\n'
         + '🪙 ' + name + '\n'
-        + '📊 MC : $' + mc.toLocaleString() + '\n'
+        + '📊 MC entree : $' + mc.toLocaleString() + '\n'
         + '⏱ Age : ' + Math.round(ageSec) + 's\n'
         + '🔄 Dernier trade : il y a ' + Math.round(lastTradeSec) + 's\n==================\n'
-        + '⚡ Achat via Jito...'
+        + '🏆 TP : $' + tpTarget.toLocaleString() + ' MC (+$' + (MISE_USD * TP_PCT / 100) + ')\n'
+        + '🛑 SL : $' + slTarget.toLocaleString() + ' MC (-$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
+        + '⚡ Achat $' + MISE_USD + ' via Jito...'
       );
       await snipe(coin.mint, name, mc);
       break;
@@ -412,20 +416,26 @@ async function scanPumpFun() {
 
 async function startSniper() {
   console.log('[SNIPER] Actif — scan Pump.fun direct — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — TP +' + TP_PCT + '% SL -' + SL_PCT + '%');
+  const tpUSD = MISE_USD * TP_PCT / 100;
+  const slUSD = MISE_USD * SL_PCT / 100;
+  const breakevenWinRate = Math.round(slUSD / (tpUSD + slUSD) * 100);
   await sendTelegram(
     '🎯 SNIPER v9 DEMARRE\n==================\n'
-    + '📡 Scan Pump.fun direct (pas de delai)\n==================\n'
-    + '⏱ Fenetre : ' + MIN_AGE_SEC + 's - ' + MAX_AGE_SEC + 's\n'
+    + '📡 Scan Pump.fun direct toutes les ' + (SCAN_INTERVAL / 1000) + 's\n==================\n'
+    + '⏱ Age token : ' + MIN_AGE_SEC + 's - ' + (MAX_AGE_SEC / 60) + 'min\n'
     + '📊 MC : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + '\n'
     + '🔄 Activite : trade < ' + MAX_LAST_TRADE_SEC + 's\n==================\n'
-    + '💰 Mise : $' + MISE_USD + '\n'
-    + '🎯 TP : +' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + '\n'
-    + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + '\n==================\n'
-    + '💀 Rug : vente en 6s (MC=0)\n'
-    + '📉 Dump : vente si -30% en 3s\n'
-    + '⏰ Max hold : 10 minutes\n'
-    + '⚡ Jito bundles actifs\n'
-    + '📊 Rapport toutes les 10 snipes\n'
+    + '💰 Mise : $' + MISE_USD + ' x ' + MAX_OPEN + ' positions\n'
+    + '🏆 TP : +' + TP_PCT + '% = +$' + tpUSD + ' de benefice\n'
+    + '🛑 SL : -' + SL_PCT + '% = -$' + slUSD + ' de perte\n'
+    + '📐 Ratio risque : 2:1 (rentable a partir de ' + breakevenWinRate + '% win)\n==================\n'
+    + '💀 Rug : vente urgence en 6s\n'
+    + '📉 Dump -30% : vente urgence immediate\n'
+    + '⏰ Max hold : 12 minutes\n'
+    + '⚡ Jito bundles actifs\n==================\n'
+    + '🧮 OBJECTIF :\n'
+    + '   5 trades/jour a 45% win\n'
+    + '   → +' + (5 * (tpUSD * 0.45 - slUSD * 0.55)).toFixed(0) + '$/jour estimé\n'
     + '=================='
   );
 
