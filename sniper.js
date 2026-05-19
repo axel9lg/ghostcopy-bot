@@ -65,35 +65,59 @@ async function sendTelegram(msg) {
   } catch(e) {}
 }
 
-// Pump.fun API — deux listes : plus recents + plus actifs
+const PUMP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Origin': 'https://pump.fun',
+  'Referer': 'https://pump.fun/',
+};
+
+// Essaie plusieurs endpoints Pump.fun — retourne le premier qui marche
+async function fetchPumpList(sort) {
+  const urls = [
+    'https://frontend-api-v3.pump.fun/coins?sort=' + sort + '&order=DESC&offset=0&limit=50',
+    'https://frontend-api.pump.fun/coins?sort=' + sort + '&order=DESC&offset=0&limit=100',
+  ];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { headers: PUMP_HEADERS });
+      if (!r.ok) { console.log('[API] ' + url.split('/')[2] + ' → HTTP ' + r.status); continue; }
+      const data = await r.json();
+      const list = Array.isArray(data) ? data : (data.coins || data.data || data.tokens || []);
+      if (list.length > 0) { console.log('[API] ' + list.length + ' tokens via ' + url.split('/')[2]); return list; }
+      console.log('[API] Reponse vide depuis ' + url.split('/')[2]);
+    } catch(e) { console.log('[API] Erreur ' + e.message); }
+  }
+  return [];
+}
+
 async function getPumpTokens() {
-  try {
-    const [r1, r2] = await Promise.all([
-      fetch('https://frontend-api.pump.fun/coins?sort=created_timestamp&order=DESC&offset=0&limit=100',
-        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }),
-      fetch('https://frontend-api.pump.fun/coins?sort=last_trade_unix_time&order=DESC&offset=0&limit=100',
-        { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } })
-    ]);
-    const list1 = r1.ok ? await r1.json() : [];
-    const list2 = r2.ok ? await r2.json() : [];
-    // Fusionner sans doublons
-    const seen = new Set();
-    const merged = [];
-    for (const coin of [...list1, ...list2]) {
-      if (coin.mint && !seen.has(coin.mint)) { seen.add(coin.mint); merged.push(coin); }
-    }
-    return merged;
-  } catch(e) { return []; }
+  const [list1, list2] = await Promise.all([
+    fetchPumpList('created_timestamp'),
+    fetchPumpList('last_trade_unix_time'),
+  ]);
+  const seen = new Set();
+  const merged = [];
+  for (const coin of [...list1, ...list2]) {
+    if (coin.mint && !seen.has(coin.mint)) { seen.add(coin.mint); merged.push(coin); }
+  }
+  return merged;
 }
 
 async function getPumpCoin(mint) {
-  try {
-    const r = await fetch('https://frontend-api.pump.fun/coins/' + mint,
-      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }
-    );
-    if (!r.ok) return null;
-    return await r.json();
-  } catch(e) { return null; }
+  const urls = [
+    'https://frontend-api-v3.pump.fun/coins/' + mint,
+    'https://frontend-api.pump.fun/coins/' + mint,
+  ];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { headers: PUMP_HEADERS });
+      if (!r.ok) continue;
+      const data = await r.json();
+      return data;
+    } catch(e) {}
+  }
+  return null;
 }
 
 async function submitViaJito(vtx) {
@@ -362,9 +386,10 @@ async function scanPumpFun() {
   try {
     const tokens = await getPumpTokens();
     if (!tokens || tokens.length === 0) {
-      console.log('[SCAN] Aucun token recu de Pump.fun API');
+      console.log('[SCAN] API injoignable — retry dans ' + (SCAN_INTERVAL / 1000) + 's');
       return;
     }
+    console.log('[SCAN] ' + tokens.length + ' tokens reçus');
 
     const now = Date.now() / 1000;
     let total = 0, tooYoung = 0, tooOld = 0, mcTooLow = 0, mcTooHigh = 0, inactive = 0, candidates = 0;
