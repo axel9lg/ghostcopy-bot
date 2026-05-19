@@ -48,6 +48,9 @@ const JITO_TIP_ACCOUNTS = [
 
 const sniped = new Set();
 const positions = {};
+const watchlist = {};  // tokens surveilles en approche du seuil $8k
+
+const WATCH_MIN_MC = 5000;  // commence a surveiller a $5k
 
 const stats = {
   total: 0, wins: 0, losses: 0, skipped: 0,
@@ -327,6 +330,32 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   }, MONITOR_INTERVAL);
 }
 
+// Surveille les tokens en approche $8k et achete au passage du seuil
+async function checkWatchlist() {
+  const entries = Object.entries(watchlist);
+  if (entries.length === 0) return;
+  for (const [mint, info] of entries) {
+    if (sniped.has(mint) || positions[mint]) { delete watchlist[mint]; continue; }
+    if (Date.now() - info.addedAt > MAX_AGE_SEC * 1000) {
+      delete watchlist[mint];
+      continue;
+    }
+    try {
+      const coin = await getPumpCoin(mint);
+      const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
+      if (!mc) { delete watchlist[mint]; continue; }
+      console.log('[WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' MC → seuil $' + MIN_MC.toLocaleString());
+      if (mc >= MIN_MC) {
+        delete watchlist[mint];
+        if (Object.keys(positions).length < MAX_OPEN) {
+          console.log('[ENTRY] ' + info.name + ' franchit $' + mc.toLocaleString() + ' → ACHAT!');
+          await snipe(mint, info.name, mc);
+        }
+      }
+    } catch(e) {}
+  }
+}
+
 async function snipe(mint, name, entryMC) {
   if (positions[mint]) return;
   if (Object.keys(positions).length >= MAX_OPEN) return;
@@ -409,12 +438,21 @@ async function scanPumpFun() {
 
       if (ageSec < MIN_AGE_SEC) { tooYoung++; continue; }
       if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
+      if (coin.complete) continue;
+      // last_trade=0 = jamais trade = token tres frais = OK
+      if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
+
+      // Token en approche du seuil $8k : ajouter au watchlist
+      if (mc >= WATCH_MIN_MC && mc < MIN_MC) {
+        if (!watchlist[coin.mint] && !sniped.has(coin.mint) && !positions[coin.mint]) {
+          watchlist[coin.mint] = { name, addedAt: Date.now() };
+          console.log('[WATCH] ' + name + ' | $' + mc.toLocaleString() + ' MC → surveillance jusqu a $' + MIN_MC.toLocaleString());
+        }
+        continue;
+      }
+
       if (mc < MIN_MC) { mcTooLow++; continue; }
       if (mc > MAX_MC) { mcTooHigh++; continue; }
-      // last_trade=0 = jamais trade = token tres frais = OK
-      // last_trade trop ancien = mort
-      if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
-      if (coin.complete) continue;
 
       candidates++;
       console.log('[CANDIDAT] ' + name + ' | $' + mc.toLocaleString() + ' MC | age ' + Math.round(ageSec) + 's | trade il y a ' + Math.round(lastTradeSec) + 's');
@@ -468,8 +506,10 @@ async function startSniper() {
     + '=================='
   );
 
-  // Scan toutes les 8 secondes
+  // Scan toutes les 5 secondes pour decouvrir nouveaux tokens
   setInterval(() => scanPumpFun(), SCAN_INTERVAL);
+  // Watchlist verifie toutes les 3 secondes pour saisir le passage a $8k
+  setInterval(() => checkWatchlist(), 3000);
   // Premier scan immediat
   scanPumpFun();
 }
