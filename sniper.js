@@ -27,7 +27,7 @@ const MAX_HOLD_MS = 12 * 60 * 1000; // force sell apres 12 minutes max
 // Filtres — donnees Pump.fun directes
 const MIN_AGE_SEC = 10;          // au moins 10s
 const MAX_AGE_SEC = 900;         // max 15 minutes
-const MIN_MC = 2000;             // MC minimum $2k
+const MIN_MC = 8000;             // MC minimum $8k (token avec traction)
 const MAX_MC = 100000;           // MC maximum $100k
 const MAX_LAST_TRADE_SEC = 120;  // trade dans les 2 dernieres minutes
 const SCAN_INTERVAL = 5000;      // scan toutes les 5 secondes
