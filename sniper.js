@@ -20,8 +20,9 @@ const TP_PCT = 10;   // +10% = +$20
 const SL_PCT = 10;   // -10% = -$20 (risque/recompense 1:1)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 5000;
+const MONITOR_INTERVAL = 3000;  // check toutes les 3s (etait 5s)
 const MAX_OPEN = 3;
+const MAX_HOLD_MS = 10 * 60 * 1000; // force sell apres 10 minutes max
 
 // Filtres — donnees Pump.fun directes (pas de delai DexScreener)
 const MIN_AGE_SEC = 15;         // au moins 15s (evite les rugs immediats)
@@ -123,7 +124,7 @@ async function submitViaJito(vtx) {
   }
 }
 
-async function sellToken(mint) {
+async function sellToken(mint, slippageBps = 500) {
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
       myWallet.publicKey, { mint: new PublicKey(mint) }
@@ -131,7 +132,7 @@ async function sellToken(mint) {
     if (!tokenAccounts.value.length) return null;
     const balance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount;
     if (balance === '0') return null;
-    const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + mint + '&outputMint=' + SOL + '&amount=' + balance + '&slippageBps=500');
+    const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + mint + '&outputMint=' + SOL + '&amount=' + balance + '&slippageBps=' + slippageBps);
     const q = await qr.json();
     if (!q.outAmount) return null;
     const sr = await fetch('https://api.jup.ag/swap/v1/swap', {
@@ -173,26 +174,81 @@ async function sendSniperReport() {
 async function monitorSnipe(mint, name, entryMC, buyTime) {
   let peak = entryMC;
   let checks = 0;
+  let consecutiveZeros = 0;
+  let lastMC = entryMC;
   const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
   const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
   const interval = setInterval(async () => {
     try {
       checks++;
-      // Surveillance via Pump.fun API — plus rapide que DexScreener pour nouveaux tokens
       const coin = await getPumpCoin(mint);
       const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
 
+      // MC = 0 : rug probable — vendre apres 2 checks consecutifs (6s)
       if (!mc) {
-        if (checks >= 24) { // 2 minutes sans donnees = rug
+        consecutiveZeros++;
+        if (consecutiveZeros >= 2) {
           clearInterval(interval);
-          const lossUSD = MISE_USD * SL_PCT / 100;
-          stats.losses++;
-          stats.totalLossUSD += lossUSD;
           delete positions[mint];
-          await sendTelegram('🔴 ABANDON\n🪙 ' + name + '\nRug probable\nPERTE : -$' + lossUSD);
+          stats.losses++;
+          stats.totalLossUSD += MISE_USD * SL_PCT / 100;
+          const sig = await sellToken(mint, 3000);
+          await sendTelegram(
+            '💀 RUG DETECTE\n==================\n🪙 ' + name + '\n'
+            + '⚠️ MC a $0 — vente urgence\n==================\n'
+            + '📉 Perte estimee : -$' + (MISE_USD * SL_PCT / 100).toFixed(0) + '\n'
+            + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
+          );
           if (stats.total % 10 === 0) sendSniperReport();
         }
+        return;
+      }
+      consecutiveZeros = 0;
+
+      // Force sell apres MAX_HOLD_MS (10 min)
+      if (Date.now() - buyTime > MAX_HOLD_MS) {
+        clearInterval(interval);
+        const gainPct = Math.round((mc / entryMC - 1) * 100);
+        const gainUSD = (gainPct / 100) * MISE_USD;
+        delete positions[mint];
+        if (gainUSD >= 0) { stats.wins++; stats.totalGainUSD += gainUSD; }
+        else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
+        const sig = await sellToken(mint, 1000);
+        const dureeMin = Math.round((Date.now() - buyTime) / 60000);
+        await sendTelegram(
+          '⏰ 10MIN MAX ATTEINT\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
+          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
+          + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ')\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
+        );
+        if (stats.total % 10 === 0) sendSniperReport();
+        return;
+      }
+
+      // Dump rapide : chute >30% en un seul check = vente urgence
+      const dropPct = lastMC > 0 ? Math.round((mc / lastMC - 1) * 100) : 0;
+      lastMC = mc;
+      if (dropPct <= -30) {
+        clearInterval(interval);
+        const gainPct = Math.round((mc / entryMC - 1) * 100);
+        const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
+        stats.losses++;
+        stats.totalLossUSD += perteUSD;
+        delete positions[mint];
+        const sig = await sellToken(mint, 3000);
+        const dureeMin = Math.round((Date.now() - buyTime) / 60000);
+        await sendTelegram(
+          '📉 DUMP -' + Math.abs(dropPct) + '% DETECTE\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
+          + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
+          + '📉 Perte : -$' + perteUSD.toFixed(0) + '\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
+        );
+        if (stats.total % 10 === 0) sendSniperReport();
         return;
       }
 
@@ -209,7 +265,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         stats.wins++;
         stats.totalGainUSD += gainUSD;
         delete positions[mint];
-        const sig = await sellToken(mint);
+        const sig = await sellToken(mint, 500);
         await sendTelegram(
           '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
@@ -232,7 +288,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         stats.losses++;
         stats.totalLossUSD += perteUSD;
         delete positions[mint];
-        const sig = await sellToken(mint);
+        const sig = await sellToken(mint, 1500);
         await sendTelegram(
           '🔴 STOP LOSS\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
@@ -357,14 +413,17 @@ async function scanPumpFun() {
 async function startSniper() {
   console.log('[SNIPER] Actif — scan Pump.fun direct — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — TP +' + TP_PCT + '% SL -' + SL_PCT + '%');
   await sendTelegram(
-    '🎯 SNIPER v8 DEMARRE\n==================\n'
+    '🎯 SNIPER v9 DEMARRE\n==================\n'
     + '📡 Scan Pump.fun direct (pas de delai)\n==================\n'
     + '⏱ Fenetre : ' + MIN_AGE_SEC + 's - ' + MAX_AGE_SEC + 's\n'
     + '📊 MC : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + '\n'
     + '🔄 Activite : trade < ' + MAX_LAST_TRADE_SEC + 's\n==================\n'
     + '💰 Mise : $' + MISE_USD + '\n'
     + '🎯 TP : +' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + '\n'
-    + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + '\n'
+    + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + '\n==================\n'
+    + '💀 Rug : vente en 6s (MC=0)\n'
+    + '📉 Dump : vente si -30% en 3s\n'
+    + '⏰ Max hold : 10 minutes\n'
     + '⚡ Jito bundles actifs\n'
     + '📊 Rapport toutes les 10 snipes\n'
     + '=================='
