@@ -68,6 +68,36 @@ async function sendTelegram(msg) {
   } catch(e) {}
 }
 
+let lastUpdateId = 0;
+async function pollTelegram() {
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + process.env.TELEGRAM_TOKEN + '/getUpdates?offset=' + (lastUpdateId + 1) + '&limit=10&timeout=0');
+    const data = await r.json();
+    if (!data.ok || !data.result.length) return;
+    for (const update of data.result) {
+      lastUpdateId = update.update_id;
+      const text = (update.message?.text || '').toLowerCase().trim();
+      if (text === '/bilan' || text === 'bilan') {
+        await sendSniperReport();
+      } else if (text === '/positions' || text === 'positions') {
+        const open = Object.entries(positions).filter(([, p]) => p.status === 'open');
+        if (!open.length) {
+          await sendTelegram('📭 Aucune position ouverte');
+        } else {
+          let msg = '📊 POSITIONS OUVERTES (' + open.length + '/' + MAX_OPEN + ')\n==================\n';
+          for (const [mint, pos] of open) {
+            const dureeMin = Math.round((Date.now() - pos.buyTime) / 60000);
+            msg += '🪙 ' + (pos.name || mint.slice(0, 8)) + ' — ' + dureeMin + 'min\n';
+          }
+          await sendTelegram(msg);
+        }
+      } else if (text === '/aide' || text === 'aide') {
+        await sendTelegram('🤖 COMMANDES DISPONIBLES\n==================\n/bilan — rapport complet des snipes\n/positions — positions actuellement ouvertes\n/aide — cette liste');
+      }
+    }
+  } catch(e) {}
+}
+
 const PUMP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'application/json',
@@ -383,7 +413,7 @@ async function snipe(mint, name, entryMC) {
       const sig = await submitViaJito(vtx);
 
       const buyTime = Date.now();
-      positions[mint] = { status: 'open', buyTime, sig };
+      positions[mint] = { status: 'open', buyTime, sig, name };
       stats.total++;
       sniped.add(mint);
 
@@ -510,6 +540,8 @@ async function startSniper() {
   setInterval(() => scanPumpFun(), SCAN_INTERVAL);
   // Watchlist verifie toutes les 3 secondes pour saisir le passage a $8k
   setInterval(() => checkWatchlist(), 3000);
+  // Ecoute les commandes Telegram toutes les 3 secondes
+  setInterval(() => pollTelegram(), 3000);
   // Premier scan immediat
   scanPumpFun();
 }
