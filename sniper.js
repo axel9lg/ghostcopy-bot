@@ -402,14 +402,18 @@ async function scanPumpFun() {
       const createdSec = coin.created_timestamp > 1e12 ? coin.created_timestamp / 1000 : coin.created_timestamp;
       const ageSec = now - createdSec;
       const mc = Math.round(coin.usd_market_cap || 0);
-      const lastTradeSec = now - (coin.last_trade_unix_time || 0);
+      // last_trade peut etre en ms ou en s selon l'API, ou 0 si jamais trade
+      const lastTradeRaw = coin.last_trade_unix_time || 0;
+      const lastTradeSec = lastTradeRaw > 1e12 ? now - (lastTradeRaw / 1000) : (lastTradeRaw > 0 ? now - lastTradeRaw : 0);
       const name = coin.symbol || coin.name || coin.mint.slice(0, 8);
 
       if (ageSec < MIN_AGE_SEC) { tooYoung++; continue; }
       if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
       if (mc < MIN_MC) { mcTooLow++; continue; }
       if (mc > MAX_MC) { mcTooHigh++; continue; }
-      if (lastTradeSec > MAX_LAST_TRADE_SEC) { inactive++; continue; }
+      // last_trade=0 = jamais trade = token tres frais = OK
+      // last_trade trop ancien = mort
+      if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
       if (coin.complete) continue;
 
       candidates++;
