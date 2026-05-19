@@ -238,7 +238,9 @@ async function monitorSnipe(mint, name, entryMC, buyTime, tpMCOverride = null) {
   let lastMC = entryMC;
   const tpMC = tpMCOverride || Math.round(entryMC * (1 + TP_PCT / 100));
   const gainPctTarget = Math.round((tpMC / entryMC - 1) * 100);
-  const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
+  // Dip strategy : SL = prix d achat → perte ≈ $0 (juste frais)
+  // Standard : SL = -10%
+  const slMC = tpMCOverride ? entryMC : Math.round(entryMC * (1 - SL_PCT / 100));
 
   const interval = setInterval(async () => {
     try {
@@ -328,8 +330,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime, tpMCOverride = null) {
         delete positions[mint];
         const sig = await sellToken(mint, 500);
         await sendTelegram(
-          '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
+          '🏆 BENEFICE +' + gainPctTarget + '%\n==================\n🪙 ' + name + '\n'
+          + '📊 Achat : $' + entryMC.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
           + '💰 Gain : +' + gainPct + '% (+$' + gainUSD.toFixed(0) + ')\n'
           + '💵 Capital : $' + (MISE_USD + gainUSD).toFixed(0) + '\n'
@@ -346,15 +348,19 @@ async function monitorSnipe(mint, name, entryMC, buyTime, tpMCOverride = null) {
       if (mc <= slMC) {
         clearInterval(interval);
         const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
-        stats.losses++;
-        stats.totalLossUSD += perteUSD;
+        // Dip strategy : SL = entree → perte reelle = frais uniquement (~$2-3)
+        const isDipSL = tpMCOverride !== null;
+        if (perteUSD > 1) { stats.losses++; stats.totalLossUSD += perteUSD; }
         delete positions[mint];
         const sig = await sellToken(mint, 1500);
         await sendTelegram(
-          '🔴 STOP LOSS\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n'
+          (isDipSL ? '↩️ RETOUR ENTREE\n' : '🔴 STOP LOSS\n')
+          + '==================\n🪙 ' + name + '\n'
+          + '📊 Achat : $' + entryMC.toLocaleString() + ' MC\n'
           + '📊 Sortie : $' + mc.toLocaleString() + ' MC\n==================\n'
-          + '📉 Perte : -' + Math.abs(gainPct) + '% (-$' + perteUSD.toFixed(0) + ')\n'
+          + (isDipSL
+              ? '✅ Mise recupéree (~$' + MISE_USD + ' - frais)\n'
+              : '📉 Perte : -' + Math.abs(gainPct) + '% (-$' + perteUSD.toFixed(0) + ')\n')
           + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
@@ -388,7 +394,7 @@ async function checkWatchlist() {
           + '⏳ En attente du dip...\n'
           + '🛒 Achat si : $' + buyTarget.toLocaleString() + ' MC (-' + DIP_PCT + '%)\n'
           + '🏆 TP : $' + callMC.toLocaleString() + ' MC (+100% = +$' + MISE_USD + ')\n'
-          + '🛑 SL : $' + Math.round(buyTarget * (1 - SL_PCT / 100)).toLocaleString() + ' MC (-' + SL_PCT + '% depuis achat)'
+          + '🛑 SL : $' + buyTarget.toLocaleString() + ' MC (= prix achat → perte ≈ $0)'
         );
       }
     } catch(e) {}
@@ -537,7 +543,7 @@ async function scanPumpFun() {
           + '⏳ En attente du dip...\n'
           + '🛒 Achat si : $' + buyTarget.toLocaleString() + ' MC (-' + DIP_PCT + '%)\n'
           + '🏆 TP : $' + callMC.toLocaleString() + ' MC (+100% = +$' + MISE_USD + ')\n'
-          + '🛑 SL : $' + Math.round(buyTarget * (1 - SL_PCT / 100)).toLocaleString() + ' MC (-' + SL_PCT + '% depuis achat)'
+          + '🛑 SL : $' + buyTarget.toLocaleString() + ' MC (= prix achat → perte ≈ $0)'
         );
       }
     }
