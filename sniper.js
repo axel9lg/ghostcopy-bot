@@ -14,6 +14,11 @@ const connection = new Connection(httpUrl, { commitment: 'confirmed', wsEndpoint
 const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_KEY));
 const SOL = 'So11111111111111111111111111111111111111112';
 
+// PAIEMENT
+const PRIX_TRIAL_SOL = process.env.PRIX_TRIAL_SOL || '0';          // essai gratuit
+const PRIX_MENSUEL_SOL = process.env.PRIX_MENSUEL_SOL || '0.5';    // acces mensuel
+const PAYMENT_WALLET = process.env.PAYMENT_WALLET || '';            // adresse SOL pour recevoir les paiements
+
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
@@ -131,11 +136,22 @@ async function pollTelegram() {
       if (cmd === '/start') {
         await sendTo(chatId,
           '👋 Bienvenue sur GhostCopy Sniper!\n==================\n'
-          + '🤖 Bot de snipe automatique Pump.fun\n'
-          + 'Recevez les signaux en temps reel.\n==================\n'
+          + '🤖 Signaux de snipe Pump.fun en temps reel\n==================\n'
           + '🆓 /trial — Essai 50 snipes gratuit\n'
-          + '💎 Acces illimite → ' + ADMIN_USERNAME + '\n==================\n'
+          + '💎 /payer — Acces mensuel illimite\n==================\n'
           + '/statut — Mon acces\n/aide — Aide'
+        );
+      } else if (cmd === '/payer' && !isAdmin) {
+        const wallet = PAYMENT_WALLET || '(adresse non configuree — contactez ' + ADMIN_USERNAME + ')';
+        await sendTo(chatId,
+          '💎 ACCES MENSUEL ILLIMITE\n==================\n'
+          + '💰 Prix : ' + PRIX_MENSUEL_SOL + ' SOL / mois\n==================\n'
+          + '📤 Envoie exactement ' + PRIX_MENSUEL_SOL + ' SOL a :\n\n'
+          + wallet + '\n\n'
+          + '==================\n'
+          + '✅ Ensuite envoie le lien de ta transaction a ' + ADMIN_USERNAME + '\n'
+          + 'Ton acces sera active manuellement sous 24h.\n==================\n'
+          + '🆓 Essai gratuit disponible : /trial'
         );
       } else if (cmd === '/trial' && !isAdmin) {
         const sub = subscribers[userId];
@@ -165,7 +181,7 @@ async function pollTelegram() {
           }
         }
       } else if (cmd === '/aide') {
-        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai 50 snipes\n/statut — Mon acces\n/aide — Cette liste';
+        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai 50 snipes gratuit\n/payer — Acces mensuel illimite\n/statut — Mon acces\n/aide — Cette liste';
         if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport\n/positions — Positions';
         await sendTo(chatId, helpMsg);
 
