@@ -3,6 +3,7 @@ const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, Syste
 const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 const http = require('http');
+const fs = require('fs');
 
 const server = http.createServer((req, res) => { res.writeHead(200); res.end('SNIPER OK'); });
 server.listen(3001);
@@ -47,6 +48,16 @@ const JITO_TIP_ACCOUNTS = [
   'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1sMaC9yXJrL',
 ];
 
+const ADMIN_ID = String(process.env.TELEGRAM_CHAT_ID);
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '@admin';
+const SUBSCRIBERS_FILE = './subscribers.json';
+
+let subscribers = {};
+try { subscribers = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8')); } catch(e) { subscribers = {}; }
+function saveSubscribers() {
+  try { fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(subscribers, null, 2)); } catch(e) {}
+}
+
 const sniped = new Set();
 const positions = {};
 const watchlist = {};  // tokens $5k-$8k surveilles pour capter le franchissement
@@ -57,14 +68,38 @@ const stats = {
   bestGainPct: 0, bestToken: ''
 };
 
-async function sendTelegram(msg) {
+async function sendTo(chatId, msg) {
   try {
     await fetch('https://api.telegram.org/bot' + process.env.TELEGRAM_TOKEN + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
+      body: JSON.stringify({ chat_id: chatId, text: msg })
     });
   } catch(e) {}
+}
+
+// Envoie uniquement a l admin
+async function sendTelegram(msg) { await sendTo(ADMIN_ID, msg); }
+
+// Envoie a l admin + tous les abonnes actifs (countAsSnipe = true pour decompter l essai)
+async function broadcastTelegram(msg, countAsSnipe = false) {
+  await sendTo(ADMIN_ID, msg);
+  for (const [id, sub] of Object.entries(subscribers)) {
+    if (sub.status !== 'active' && sub.status !== 'trial') continue;
+    if (sub.status === 'trial' && sub.snipesLeft <= 0) continue;
+    await sendTo(id, msg);
+    if (countAsSnipe && sub.status === 'trial') {
+      sub.snipesLeft--;
+      sub.snipesUsed = (sub.snipesUsed || 0) + 1;
+      if (sub.snipesLeft <= 0) {
+        sub.status = 'expired';
+        saveSubscribers();
+        await sendTo(id, '⏰ ESSAI TERMINE\n==================\nVos 50 snipes gratuits sont epuises.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet 💎');
+      } else {
+        saveSubscribers();
+      }
+    }
+  }
 }
 
 let lastUpdateId = 0;
@@ -75,26 +110,125 @@ async function pollTelegram() {
     if (!data.ok || !data.result.length) return;
     for (const update of data.result) {
       lastUpdateId = update.update_id;
-      const text = (update.message?.text || '').toLowerCase().trim();
-      if (text === '/bilan' || text === 'bilan') {
-        await sendSniperReport();
-      } else if (text === '/positions' || text === 'positions') {
-        const open = Object.entries(positions).filter(([, p]) => p.status === 'open');
-        if (!open.length) {
-          await sendTelegram('📭 Aucune position ouverte');
+      const msg = update.message;
+      if (!msg) continue;
+      const userId = String(msg.from.id);
+      const chatId = String(msg.chat.id);
+      const username = msg.from.username ? '@' + msg.from.username : (msg.from.first_name || userId);
+      const text = (msg.text || '').trim();
+      const isAdmin = chatId === ADMIN_ID;
+      const cmd = text.toLowerCase().split(' ')[0];
+      const args = text.split(' ').slice(1);
+
+      // Enregistrer l utilisateur inconnu
+      if (!isAdmin && !subscribers[userId]) {
+        subscribers[userId] = { username, status: 'pending', snipesLeft: 0, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+        saveSubscribers();
+        await sendTelegram('🆕 NOUVEAU\n' + username + ' (ID: ' + userId + ')\na contacte le bot.');
+      }
+
+      // --- COMMANDES UTILISATEUR ---
+      if (cmd === '/start') {
+        await sendTo(chatId,
+          '👋 Bienvenue sur GhostCopy Sniper!\n==================\n'
+          + '🤖 Bot de snipe automatique Pump.fun\n'
+          + 'Recevez les signaux en temps reel.\n==================\n'
+          + '🆓 /trial — Essai 50 snipes gratuit\n'
+          + '💎 Acces illimite → ' + ADMIN_USERNAME + '\n==================\n'
+          + '/statut — Mon acces\n/aide — Aide'
+        );
+      } else if (cmd === '/trial' && !isAdmin) {
+        const sub = subscribers[userId];
+        if (sub && (sub.status === 'active' || sub.status === 'trial')) {
+          await sendTo(chatId, '✅ Vous avez deja un acces actif!\n/statut pour les details.');
+        } else if (sub && sub.status === 'expired') {
+          await sendTo(chatId, '⛔ Essai termine.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet.');
         } else {
-          let msg = '📊 POSITIONS OUVERTES (' + open.length + '/' + MAX_OPEN + ')\n==================\n';
-          for (const [mint, pos] of open) {
-            const dureeMin = Math.round((Date.now() - pos.buyTime) / 60000);
-            msg += '🪙 ' + (pos.name || mint.slice(0, 8)) + ' — ' + dureeMin + 'min\n';
-          }
-          await sendTelegram(msg);
+          subscribers[userId] = { username, status: 'trial', snipesLeft: 50, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+          saveSubscribers();
+          await sendTo(chatId, '🎉 ESSAI ACTIVE!\n==================\n✅ 50 snipes gratuits offerts\nVous allez recevoir tous les signaux!\n==================\nPour un acces illimite → ' + ADMIN_USERNAME);
+          await sendTelegram('🆕 ESSAI\n' + username + ' (ID: ' + userId + ')\na active un essai 50 snipes.');
         }
-      } else if (text === '/aide' || text === 'aide') {
-        await sendTelegram('🤖 COMMANDES\n==================\n/bilan — rapport complet\n/positions — positions ouvertes\n/aide — cette liste');
+      } else if (cmd === '/statut') {
+        if (isAdmin) {
+          await sendSniperReport();
+        } else {
+          const sub = subscribers[userId];
+          if (!sub || sub.status === 'pending' || sub.status === 'inactive') {
+            await sendTo(chatId, '⛔ Pas d\'acces.\n/trial pour 50 snipes gratuits\n' + ADMIN_USERNAME + ' pour acces complet');
+          } else if (sub.status === 'trial') {
+            await sendTo(chatId, '🆓 ESSAI EN COURS\n==================\n⚡ ' + sub.snipesLeft + ' snipes restants\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
+          } else if (sub.status === 'active') {
+            await sendTo(chatId, '💎 ACCES COMPLET\n==================\n✅ Illimite\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
+          } else if (sub.status === 'expired') {
+            await sendTo(chatId, '❌ ESSAI EXPIRE\nContactez ' + ADMIN_USERNAME + ' pour continuer.');
+          }
+        }
+      } else if (cmd === '/aide') {
+        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai 50 snipes\n/statut — Mon acces\n/aide — Cette liste';
+        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport\n/positions — Positions';
+        await sendTo(chatId, helpMsg);
+
+      // --- COMMANDES ADMIN ---
+      } else if (isAdmin) {
+        if (cmd === '/bilan') {
+          await sendSniperReport();
+        } else if (cmd === '/positions') {
+          const open = Object.entries(positions).filter(([, p]) => p.status === 'open');
+          if (!open.length) { await sendTelegram('📭 Aucune position ouverte'); }
+          else {
+            let posMsg = '📊 POSITIONS OUVERTES (' + open.length + '/' + MAX_OPEN + ')\n==================\n';
+            for (const [mint, pos] of open) posMsg += '🪙 ' + (pos.name || mint.slice(0, 8)) + ' — ' + Math.round((Date.now() - pos.buyTime) / 60000) + 'min\n';
+            await sendTelegram(posMsg);
+          }
+        } else if (cmd === '/users') {
+          const entries = Object.entries(subscribers);
+          if (!entries.length) { await sendTelegram('📭 Aucun utilisateur'); }
+          else {
+            let usersMsg = '👥 ABONNES (' + entries.length + ')\n==================\n';
+            for (const [id, sub] of entries) {
+              const e = sub.status === 'active' ? '💎' : sub.status === 'trial' ? '🆓' : sub.status === 'expired' ? '❌' : '⏳';
+              usersMsg += e + ' ' + (sub.username || id) + ' — ' + sub.status + (sub.status === 'trial' ? ' (' + sub.snipesLeft + ' left)' : '') + '\nID: ' + id + '\n\n';
+            }
+            await sendTelegram(usersMsg);
+          }
+        } else if (cmd === '/activer') {
+          const targetId = args[0];
+          if (!targetId) { await sendTelegram('Usage: /activer [user_id]'); }
+          else {
+            if (!subscribers[targetId]) subscribers[targetId] = { username: targetId, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+            subscribers[targetId].status = 'active';
+            subscribers[targetId].snipesLeft = 999999;
+            saveSubscribers();
+            await sendTelegram('✅ ' + (subscribers[targetId].username || targetId) + ' — acces illimite active');
+            await sendTo(targetId, '🎉 ACCES COMPLET ACTIVE!\n==================\n💎 Vous etes maintenant abonne illimite!\nVous recevrez tous les signaux en temps reel.');
+          }
+        } else if (cmd === '/trial' && isAdmin) {
+          const targetId = args[0];
+          const n = parseInt(args[1]) || 50;
+          if (!targetId) { await sendTelegram('Usage: /trial [user_id] [snipes]'); }
+          else {
+            if (!subscribers[targetId]) subscribers[targetId] = { username: targetId, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+            subscribers[targetId].status = 'trial';
+            subscribers[targetId].snipesLeft = n;
+            saveSubscribers();
+            await sendTelegram('✅ ' + (subscribers[targetId].username || targetId) + ' — ' + n + ' snipes offerts');
+            await sendTo(targetId, '🎉 ESSAI ACTIVE!\n==================\n🆓 ' + n + ' snipes offerts!\nVous recevrez les signaux en temps reel.');
+          }
+        } else if (cmd === '/desactiver') {
+          const targetId = args[0];
+          if (!targetId) { await sendTelegram('Usage: /desactiver [user_id]'); }
+          else if (!subscribers[targetId]) { await sendTelegram('❌ Utilisateur introuvable'); }
+          else {
+            subscribers[targetId].status = 'inactive';
+            saveSubscribers();
+            await sendTelegram('✅ ' + (subscribers[targetId].username || targetId) + ' — desactive');
+            await sendTo(targetId, '⛔ Votre acces a ete suspendu.\nContactez ' + ADMIN_USERNAME + ' pour reactiver.');
+          }
+        }
       }
     }
-  } catch(e) {}
+  } catch(e) { console.log('[TELEGRAM] Erreur poll : ' + e.message); }
 }
 
 const PUMP_HEADERS = {
@@ -245,7 +379,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           stats.losses++;
           stats.totalLossUSD += MISE_USD;
           const sig = await sellToken(mint, 3000);
-          await sendTelegram(
+          await broadcastTelegram(
             '💀 RUG\n==================\n🪙 ' + name + '\n'
             + '📉 Perte totale : -$' + MISE_USD + '\n'
             + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
@@ -266,7 +400,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
         const sig = await sellToken(mint, 1000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
-        await sendTelegram(
+        await broadcastTelegram(
           '⏰ 8MIN — VENTE FORCEE\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
           + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ')\n'
@@ -289,7 +423,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint, 3000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
-        await sendTelegram(
+        await broadcastTelegram(
           '📉 DUMP -' + Math.abs(dropPct) + '%\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
           + '📉 Perte : -$' + perteUSD.toFixed(0) + ' | ' + dureeMin + ' min\n'
@@ -315,7 +449,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         stats.totalGainUSD += gainUSD;
         delete positions[mint];
         const sig = await sellToken(mint, 500);
-        await sendTelegram(
+        await broadcastTelegram(
           '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n==================\n'
           + '💰 GAIN : +' + gainPct + '% = +$' + gainUSD.toFixed(0) + '\n'
@@ -333,7 +467,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         stats.wins++;  // sortie a 0 = pas une perte
         delete positions[mint];
         const sig = await sellToken(mint, 800);
-        await sendTelegram(
+        await broadcastTelegram(
           '✅ BREAK-EVEN\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Pic : $' + peak.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
           + '💰 $0 perte | ' + dureeMin + 'min\n'
@@ -378,7 +512,7 @@ async function snipe(mint, name, entryMC) {
 
       const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
 
-      await sendTelegram(
+      await broadcastTelegram(
         '🎯 SNIPE\n==================\n'
         + '🪙 ' + name + '\n'
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
@@ -386,7 +520,8 @@ async function snipe(mint, name, entryMC) {
         + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
         + '✅ SL : $' + entryMC.toLocaleString() + ' MC (break-even = $0 perte)\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
-        + '📊 https://dexscreener.com/solana/' + mint
+        + '📊 https://dexscreener.com/solana/' + mint,
+        true  // compte comme 1 snipe pour les abonnes essai
       );
       monitorSnipe(mint, name, entryMC, buyTime);
       break;
