@@ -19,6 +19,12 @@ const PRIX_TRIAL_SOL = process.env.PRIX_TRIAL_SOL || '0';          // essai grat
 const PRIX_MENSUEL_SOL = process.env.PRIX_MENSUEL_SOL || '0.5';    // acces mensuel
 const PAYMENT_WALLET = process.env.PAYMENT_WALLET || '';            // adresse SOL pour recevoir les paiements
 
+// COFFRE AUTOMATIQUE
+const COFFRE_TRIGGER_USD = 700;   // quand le profit net atteint $700 → on coffre
+const COFFRE_AMOUNT_USD = 500;    // on envoie $500 au coffre
+const TREASURY_WALLET = process.env.TREASURY_WALLET || '';          // wallet coffre (configure sur Render)
+let cofrageEnCours = false;
+
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
@@ -352,6 +358,52 @@ async function sellToken(mint, slippageBps = 500) {
   } catch(e) { console.log('Erreur sell : ' + e.message); return null; }
 }
 
+async function getSolPrice() {
+  try {
+    const r = await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112');
+    const data = await r.json();
+    return data?.data?.['So11111111111111111111111111111111111111112']?.price || 0;
+  } catch(e) { return 0; }
+}
+
+async function coffreTresorie() {
+  if (cofrageEnCours) return;
+  cofrageEnCours = true;
+  try {
+    if (!TREASURY_WALLET) {
+      await sendTelegram('⚠️ COFFRE : configure TREASURY_WALLET sur Render !');
+      cofrageEnCours = false;
+      return;
+    }
+    const solPrice = await getSolPrice();
+    if (!solPrice) { await sendTelegram('⚠️ COFFRE : impossible de recuperer le prix SOL'); cofrageEnCours = false; return; }
+    const lamports = Math.round((COFFRE_AMOUNT_USD / solPrice) * 1e9);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: myWallet.publicKey })
+      .add(SystemProgram.transfer({ fromPubkey: myWallet.publicKey, toPubkey: new PublicKey(TREASURY_WALLET), lamports }));
+    tx.sign(myWallet);
+    const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+    // Reset profit du cycle (on garde les compteurs wins/losses/total)
+    stats.totalGainUSD = 0;
+    stats.totalLossUSD = 0;
+    const solEnvoye = (lamports / 1e9).toFixed(3);
+    await sendTelegram(
+      '🏦 COFFRE AUTOMATIQUE\n==================\n'
+      + '💰 $' + COFFRE_AMOUNT_USD + ' coffrés (' + solEnvoye + ' SOL @ $' + Math.round(solPrice) + ')\n'
+      + '🔄 Nouveau cycle — capital $' + (COFFRE_TRIGGER_USD - COFFRE_AMOUNT_USD) + ' en jeu\n'
+      + '🔗 https://solscan.io/tx/' + sig
+    );
+  } catch(e) {
+    await sendTelegram('⚠️ COFFRE ECHEC : ' + e.message);
+  }
+  cofrageEnCours = false;
+}
+
+async function checkCoffre() {
+  const net = stats.totalGainUSD - stats.totalLossUSD;
+  if (net >= COFFRE_TRIGGER_USD) await coffreTresorie();
+}
+
 async function sendSniperReport() {
   const winRate = stats.total > 0 ? Math.round((stats.wins / stats.total) * 100) : 0;
   const net = stats.totalGainUSD - stats.totalLossUSD;
@@ -401,6 +453,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
             + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
           );
           if (stats.total % 10 === 0) sendSniperReport();
+          checkCoffre();
         }
         return;
       }
@@ -424,6 +477,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
+        checkCoffre();
         return;
       }
 
@@ -446,6 +500,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
+        checkCoffre();
         return;
       }
 
@@ -456,7 +511,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
 
       console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | PIC $' + peak.toLocaleString() + ' | BE $' + slMC.toLocaleString() + ' | ' + dureeMin + 'min');
 
-      // TAKE PROFIT +30%
+      // TAKE PROFIT
       if (mc >= tpMC) {
         clearInterval(interval);
         const gainUSD = (gainPct / 100) * MISE_USD;
@@ -474,13 +529,14 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           + '📊 https://dexscreener.com/solana/' + mint
         );
         if (stats.total % 10 === 0) sendSniperReport();
+        checkCoffre();
         return;
       }
 
       // BREAK-EVEN : revente au prix d entree si ca redescend
       if (mc <= slMC) {
         clearInterval(interval);
-        stats.wins++;  // sortie a 0 = pas une perte
+        stats.wins++;
         delete positions[mint];
         const sig = await sellToken(mint, 800);
         await broadcastTelegram(
@@ -490,6 +546,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
+        checkCoffre();
       }
     } catch(e) {}
   }, MONITOR_INTERVAL);
