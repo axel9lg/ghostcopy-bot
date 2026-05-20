@@ -16,8 +16,8 @@ const SOL = 'So11111111111111111111111111111111111111112';
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 10;   // +10% = +$20
-const SL_PCT = 30;   // -30% = -$60  → laisse de la marge aux trades
+const TP_PCT = 30;   // +30% = +$60
+const SL_PCT = 1;    // -1% = -$2   → ratio 30:1 (besoin de 3% win rate)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
 const MONITOR_INTERVAL = 2000;  // check toutes les 2s (etait 3s)
