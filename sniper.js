@@ -17,10 +17,10 @@ const SOL = 'So11111111111111111111111111111111111111112';
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
 const TP_PCT = 30;   // +30% = +$60
-const SL_PCT = 10;   // -10% = -$20  → ratio 3:1 (rentable a 25% win rate)
+const SL_PCT = 7;    // -7% = -$14  → coupe les pertes plus vite
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 3000;
+const MONITOR_INTERVAL = 2000;  // check toutes les 2s (etait 3s)
 const MAX_OPEN = 4;
 const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
 
