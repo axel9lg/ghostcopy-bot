@@ -1,4 +1,4 @@
-if (process.env.NODE_ENV !== 'production') require('dotenv').config();
+﻿if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, SystemProgram } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
@@ -16,23 +16,22 @@ const SOL = 'So11111111111111111111111111111111111111112';
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const HARD_SL_PCT = 10;    // stop loss dur -10% depuis entree (anti-rug = -$20)
-const TRAILING_PCT = 15;   // trailing stop -15% depuis le pic
-const ACTIVATION_PCT = 8;  // trailing s active apres +8% de gain
+const TP_PCT = 30;   // +30% = +$60
+const SL_PCT = 10;   // -10% = -$20  → ratio 3:1 (rentable a 25% win rate)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 2000;
+const MONITOR_INTERVAL = 3000;
 const MAX_OPEN = 4;
-const MAX_HOLD_MS = 15 * 60 * 1000; // force sell apres 15 minutes (laisser courir)
+const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
 
 // Filtres
 const MIN_AGE_SEC = 10;
 const MAX_AGE_SEC = 600;        // max 10 minutes
-const MIN_MC = 5600;            // MC minimum $5.6k (-30% depuis $8k)
-const MAX_MC = 60000;           // MC maximum $60k
+const MIN_MC = 8000;            // MC minimum $8k
+const MAX_MC = 60000;           // MC maximum $60k (evite les tokens deja a peak)
 const MAX_LAST_TRADE_SEC = 120;
 const SCAN_INTERVAL = 5000;
-const WATCH_MIN_MC = 3500;      // surveille depuis $3.5k pour capter le franchissement $5.6k
+const WATCH_MIN_MC = 5000;      // surveille depuis $5k pour capter le franchissement $8k
 
 // Jito
 const JITO_ENDPOINTS = [
@@ -216,7 +215,7 @@ async function sendSniperReport() {
     + '🏆 Wins : ' + stats.wins + ' | 🔴 Losses : ' + stats.losses + '\n'
     + '📊 Win rate : ' + winRate + '% (rentable a >25%)\n'
     + '🚫 Skips : ' + stats.skipped + '\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' | Trailing -' + TRAILING_PCT + '% | Hard SL -' + HARD_SL_PCT + '%\n'
+    + '💰 Mise : $' + MISE_USD + ' | TP : +' + TP_PCT + '% (+$' + (MISE_USD * TP_PCT / 100) + ') | SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ')\n'
     + '📈 Gains : +$' + stats.totalGainUSD.toFixed(0) + '\n'
     + '📉 Pertes : -$' + stats.totalLossUSD.toFixed(0) + '\n'
     + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n==================\n'
@@ -226,11 +225,10 @@ async function sendSniperReport() {
 }
 
 async function monitorSnipe(mint, name, entryMC, buyTime) {
-  let peak = entryMC;
   let consecutiveZeros = 0;
   let lastMC = entryMC;
-  const hardSlMC = Math.round(entryMC * (1 - HARD_SL_PCT / 100));
-  const activationMC = Math.round(entryMC * (1 + ACTIVATION_PCT / 100));
+  const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+  const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
   const interval = setInterval(async () => {
     try {
@@ -244,11 +242,11 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
           clearInterval(interval);
           delete positions[mint];
           stats.losses++;
-          stats.totalLossUSD += MISE_USD * HARD_SL_PCT / 100;
+          stats.totalLossUSD += MISE_USD * SL_PCT / 100;
           const sig = await sellToken(mint, 3000);
           await sendTelegram(
             '💀 RUG\n==================\n🪙 ' + name + '\n'
-            + '📉 Perte estimee : -$' + (MISE_USD * HARD_SL_PCT / 100).toFixed(0) + '\n'
+            + '📉 Perte estimee : -$' + (MISE_USD * SL_PCT / 100).toFixed(0) + '\n'
             + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
           );
           if (stats.total % 10 === 0) sendSniperReport();
@@ -257,57 +255,76 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       }
       consecutiveZeros = 0;
 
-      // Mise a jour du pic
-      if (mc > peak) peak = mc;
-
-      const gainPct = Math.round((mc / entryMC - 1) * 100);
-      const peakPct = Math.round((peak / entryMC - 1) * 100);
-      const trailingSlMC = Math.round(peak * (1 - TRAILING_PCT / 100));
-      const dureeMin = Math.round((Date.now() - buyTime) / 60000);
-
-      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (' + (gainPct >= 0 ? '+' : '') + gainPct + '%) | PIC $' + peak.toLocaleString() + ' (+' + peakPct + '%) | TRAIL $' + trailingSlMC.toLocaleString() + ' | SL $' + hardSlMC.toLocaleString() + ' | ' + dureeMin + 'min');
-
-      // Dump rapide -25% en un check → vente urgence
-      const dropPct = lastMC > 0 ? Math.round((mc / lastMC - 1) * 100) : 0;
-      lastMC = mc;
-      if (dropPct <= -25) {
-        clearInterval(interval);
-        const perteUSD = gainPct >= 0 ? 0 : Math.abs((gainPct / 100) * MISE_USD);
-        const gainUSD = (gainPct / 100) * MISE_USD;
-        delete positions[mint];
-        if (gainUSD >= 0) { stats.wins++; stats.totalGainUSD += gainUSD; }
-        else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
-        const sig = await sellToken(mint, 3000);
-        await sendTelegram(
-          '📉 DUMP -' + Math.abs(dropPct) + '%\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ') | ' + dureeMin + ' min\n'
-          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
-        );
-        if (stats.total % 10 === 0) sendSniperReport();
-        return;
-      }
-
-      // Force sell apres 15 minutes
+      // Force sell apres 8 minutes
       if (Date.now() - buyTime > MAX_HOLD_MS) {
         clearInterval(interval);
+        const gainPct = Math.round((mc / entryMC - 1) * 100);
         const gainUSD = (gainPct / 100) * MISE_USD;
         delete positions[mint];
         if (gainUSD >= 0) { stats.wins++; stats.totalGainUSD += gainUSD; }
         else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
         const sig = await sellToken(mint, 1000);
+        const dureeMin = Math.round((Date.now() - buyTime) / 60000);
         await sendTelegram(
-          '⏰ 15MIN — VENTE FORCEE\n==================\n🪙 ' + name + '\n'
+          '⏰ 8MIN — VENTE FORCEE\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ') | ' + dureeMin + 'min\n'
+          + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ')\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
         return;
       }
 
-      // HARD SL : -10% depuis entree (protection anti-rug avant activation trailing)
-      if (mc <= hardSlMC) {
+      // Dump rapide -30% en un check → vente urgence
+      const dropPct = lastMC > 0 ? Math.round((mc / lastMC - 1) * 100) : 0;
+      lastMC = mc;
+      if (dropPct <= -30) {
+        clearInterval(interval);
+        const gainPct = Math.round((mc / entryMC - 1) * 100);
+        const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
+        stats.losses++;
+        stats.totalLossUSD += perteUSD;
+        delete positions[mint];
+        const sig = await sellToken(mint, 3000);
+        const dureeMin = Math.round((Date.now() - buyTime) / 60000);
+        await sendTelegram(
+          '📉 DUMP -' + Math.abs(dropPct) + '%\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
+          + '📉 Perte : -$' + perteUSD.toFixed(0) + ' | ' + dureeMin + ' min\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
+        );
+        if (stats.total % 10 === 0) sendSniperReport();
+        return;
+      }
+
+      const gainPct = Math.round((mc / entryMC - 1) * 100);
+      const dureeMin = Math.round((Date.now() - buyTime) / 60000);
+      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' | ' + (gainPct >= 0 ? '+' : '') + gainPct + '% | TP $' + tpMC.toLocaleString() + ' | SL $' + slMC.toLocaleString() + ' | ' + dureeMin + 'min');
+
+      // TAKE PROFIT +30%
+      if (mc >= tpMC) {
+        clearInterval(interval);
+        const gainUSD = (gainPct / 100) * MISE_USD;
+        if (gainPct > stats.bestGainPct) { stats.bestGainPct = gainPct; stats.bestToken = name; }
+        stats.wins++;
+        stats.totalGainUSD += gainUSD;
+        delete positions[mint];
+        const sig = await sellToken(mint, 500);
+        await sendTelegram(
+          '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n==================\n'
+          + '💰 GAIN : +' + gainPct + '% = +$' + gainUSD.toFixed(0) + '\n'
+          + '⏱ Duree : ' + dureeMin + ' min\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle') + '\n'
+          + '📊 https://dexscreener.com/solana/' + mint
+        );
+        if (stats.total % 10 === 0) sendSniperReport();
+        return;
+      }
+
+      // STOP LOSS -10%
+      if (mc <= slMC) {
         clearInterval(interval);
         const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
         stats.losses++;
@@ -315,32 +332,10 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         delete positions[mint];
         const sig = await sellToken(mint, 1500);
         await sendTelegram(
-          '🔴 STOP LOSS -' + HARD_SL_PCT + '%\n==================\n🪙 ' + name + '\n'
+          '🔴 STOP LOSS -' + SL_PCT + '%\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + '📉 Perte : -$' + perteUSD.toFixed(0) + ' | ' + dureeMin + 'min\n'
+          + '📉 Perte : -$' + perteUSD.toFixed(0) + ' | ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
-        );
-        if (stats.total % 10 === 0) sendSniperReport();
-        return;
-      }
-
-      // TRAILING STOP : -15% depuis le pic (s active apres +8%)
-      if (peak >= activationMC && mc <= trailingSlMC) {
-        clearInterval(interval);
-        const gainUSD = (gainPct / 100) * MISE_USD;
-        if (gainPct > stats.bestGainPct) { stats.bestGainPct = gainPct; stats.bestToken = name; }
-        stats.wins++;
-        stats.totalGainUSD += gainUSD;
-        delete positions[mint];
-        const sig = await sellToken(mint, 800);
-        await sendTelegram(
-          '📈 TRAILING STOP\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Pic : $' + peak.toLocaleString() + ' (+' + peakPct + '%)\n'
-          + '📊 Sortie : $' + mc.toLocaleString() + '\n==================\n'
-          + '💰 GAIN : +' + gainPct + '% = +$' + gainUSD.toFixed(0) + '\n'
-          + '⏱ Duree : ' + dureeMin + ' min\n'
-          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle') + '\n'
-          + '📊 https://dexscreener.com/solana/' + mint
         );
         if (stats.total % 10 === 0) sendSniperReport();
       }
@@ -382,14 +377,13 @@ async function snipe(mint, name, entryMC) {
       const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
       const slMC = Math.round(entryMC * (1 - SL_PCT / 100));
 
-      const hardSlMC = Math.round(entryMC * (1 - HARD_SL_PCT / 100));
       await sendTelegram(
         '🎯 SNIPE\n==================\n'
         + '🪙 ' + name + '\n'
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '📈 Trailing stop : -' + TRAILING_PCT + '% depuis le pic (active a +' + ACTIVATION_PCT + '%)\n'
-        + '🛑 Hard SL : $' + hardSlMC.toLocaleString() + ' MC (-' + HARD_SL_PCT + '% = -$' + (MISE_USD * HARD_SL_PCT / 100) + ')\n==================\n'
+        + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
+        + '🛑 SL : $' + slMC.toLocaleString() + ' MC (-' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ')\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint
       );
@@ -479,19 +473,19 @@ async function scanPumpFun() {
 }
 
 async function startSniper() {
-  console.log('[SNIPER] Actif — TRAILING STOP — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString());
+  console.log('[SNIPER] Actif — MOMENTUM — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — TP +' + TP_PCT + '% SL -' + SL_PCT + '%');
   await sendTelegram(
-    '🎯 SNIPER v12 — TRAILING STOP\n==================\n'
-    + '📡 Momentum + trailing stop dynamique\n==================\n'
-    + '📊 Zone entree : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + ' MC\n'
-    + '💰 Mise : $' + MISE_USD + ' | ' + MAX_OPEN + ' positions max\n==================\n'
-    + '📈 Trailing stop : -' + TRAILING_PCT + '% depuis le pic\n'
-    + '   Active apres +' + ACTIVATION_PCT + '% de gain\n'
-    + '   → Laisse courir les gros moves\n'
-    + '🛑 Hard SL : -' + HARD_SL_PCT + '% depuis entree = -$' + (MISE_USD * HARD_SL_PCT / 100) + '\n==================\n'
-    + '💀 Rug detecte en 4s\n'
-    + '📉 Dump -25% : vente immediate\n'
-    + '⏰ Max hold : 15 minutes\n'
+    '🎯 SNIPER v11 — MOMENTUM\n==================\n'
+    + '📡 Achete quand le token monte\n==================\n'
+    + '📊 Zone : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + ' MC\n'
+    + '⏱ Age : ' + MIN_AGE_SEC + 's - ' + (MAX_AGE_SEC / 60) + 'min\n==================\n'
+    + '💰 Mise : $' + MISE_USD + ' | ' + MAX_OPEN + ' positions max\n'
+    + '🏆 TP : +' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + '\n'
+    + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + '\n'
+    + '📐 Ratio 3:1 — rentable a 25% win rate\n==================\n'
+    + '💀 Rug detecte en 6s\n'
+    + '📉 Dump -30% : vente immediate\n'
+    + '⏰ Max hold : 8 minutes\n'
     + '⚡ Jito bundles actifs\n==================\n'
     + '/bilan /positions /aide'
   );
