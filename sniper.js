@@ -16,7 +16,7 @@ const SOL = 'So11111111111111111111111111111111111111112';
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 200;         // +200% = +$400
+const TP_PCT = 10;          // +10% = +$20
 // Pas de SL : on revend toujours au prix d entree (break-even = 0 perte)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
