@@ -681,6 +681,7 @@ async function scanPumpFun() {
       if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
       if (coin.complete) continue;
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
+      if ((coin.holder_count || 0) < 25) { stats.skipped++; continue; } // moins de 25 holders = probable rug
 
       // Token en approche : surveiller depuis $5k
       if (mc >= WATCH_MIN_MC && mc < MIN_MC) {
@@ -701,7 +702,7 @@ async function scanPumpFun() {
       break;
     }
 
-    console.log('[SCAN] ' + total + ' tokens | frais:' + tooYoung + ' vieux:' + tooOld + ' MC bas:' + mcTooLow + ' MC haut:' + mcTooHigh + ' inactifs:' + inactive + ' watch:' + Object.keys(watchlist).length + ' → ' + candidates + ' candidat(s)');
+    console.log('[SCAN] ' + total + ' tokens | frais:' + tooYoung + ' vieux:' + tooOld + ' MC bas:' + mcTooLow + ' MC haut:' + mcTooHigh + ' inactifs:' + inactive + ' skips:' + stats.skipped + ' watch:' + Object.keys(watchlist).length + ' → ' + candidates + ' candidat(s)');
   } catch(e) {
     console.log('[SCAN] Erreur : ' + e.message);
   }
