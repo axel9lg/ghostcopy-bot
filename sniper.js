@@ -28,7 +28,7 @@ let cofrageEnCours = false;
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 200;         // +200% = +$400
+const TP_LEVELS = [20, 40, 60, 100]; // vente 25% a chaque niveau
 // SL = prix d entree (limit sell au prix d achat = 0 perte)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
@@ -333,13 +333,15 @@ async function submitViaJito(vtx) {
   }
 }
 
-async function sellToken(mint, slippageBps = 500) {
+async function sellToken(mint, slippageBps = 500, sellPct = 100) {
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
       myWallet.publicKey, { mint: new PublicKey(mint) }
     );
     if (!tokenAccounts.value.length) return null;
-    const balance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount;
+    const fullBalance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount;
+    if (fullBalance === '0') return null;
+    const balance = sellPct >= 100 ? fullBalance : String(Math.floor(Number(fullBalance) * sellPct / 100));
     if (balance === '0') return null;
     const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + mint + '&outputMint=' + SOL + '&amount=' + balance + '&slippageBps=' + slippageBps);
     const q = await qr.json();
@@ -431,7 +433,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   let lastMC = entryMC;
   let peak = entryMC;
   let slMC = entryMC; // limit sell au prix d entree = 0 perte
-  const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+  let tpIndex = 0; // prochain niveau TP a atteindre (0=20%, 1=40%, 2=60%, 3=100%)
+  const tpMCs = TP_LEVELS.map(pct => Math.round(entryMC * (1 + pct / 100)));
 
   const interval = setInterval(async () => {
     try {
@@ -509,40 +512,44 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       const gainPct = Math.round((mc / entryMC - 1) * 100);
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
 
-      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | SL $' + slMC.toLocaleString() + ' | ' + dureeMin + 'min');
+      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | TP' + (tpIndex + 1) + ' $' + (tpMCs[tpIndex] || '✅').toLocaleString() + ' | ' + dureeMin + 'min');
 
-      // TAKE PROFIT
-      if (mc >= tpMC) {
-        clearInterval(interval);
-        const gainUSD = (gainPct / 100) * MISE_USD;
-        if (gainPct > stats.bestGainPct) { stats.bestGainPct = gainPct; stats.bestToken = name; }
-        stats.wins++;
+      // MULTI-TP : vente 25% a chaque niveau
+      while (tpIndex < TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
+        const level = TP_LEVELS[tpIndex];
+        const isLast = tpIndex === TP_LEVELS.length - 1;
+        const gainUSD = (level / 100) * MISE_USD * 0.25;
         stats.totalGainUSD += gainUSD;
-        delete positions[mint];
-        const sig = await sellToken(mint, 500);
+        if (level > stats.bestGainPct) { stats.bestGainPct = level; stats.bestToken = name; }
+        const sig = await sellToken(mint, 500, isLast ? 100 : 25);
         await broadcastTelegram(
-          '🏆 TP +' + TP_PCT + '% ATTEINT\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n==================\n'
-          + '💰 GAIN : +' + gainPct + '% = +$' + gainUSD.toFixed(0) + '\n'
-          + '⏱ Duree : ' + dureeMin + ' min\n'
-          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle') + '\n'
-          + '📊 https://dexscreener.com/solana/' + mint
+          '🏆 TP ' + (tpIndex + 1) + '/4 +' + level + '%\n==================\n🪙 ' + name + '\n'
+          + '📊 MC : $' + mc.toLocaleString() + ' | Entree : $' + entryMC.toLocaleString() + '\n'
+          + '💰 +$' + gainUSD.toFixed(0) + ' (25% vendu)\n'
+          + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
-        if (stats.total % 10 === 0) sendSniperReport();
-        checkCoffre();
-        return;
+        tpIndex++;
+        if (isLast) {
+          clearInterval(interval);
+          stats.wins++;
+          delete positions[mint];
+          if (stats.total % 10 === 0) sendSniperReport();
+          checkCoffre();
+          return;
+        }
       }
 
-      // LIMIT SELL au prix d entree (break-even = 0 perte)
+      // LIMIT SELL au prix d entree : revente du reste = 0 perte
       if (mc <= slMC) {
         clearInterval(interval);
-        stats.wins++;
+        if (tpIndex > 0) { stats.wins++; } // a deja pris des profits
         delete positions[mint];
-        const sig = await sellToken(mint, 800);
+        const sig = await sellToken(mint, 800, 100);
+        const profitDeja = TP_LEVELS.slice(0, tpIndex).reduce((s, pct) => s + (pct / 100) * MISE_USD * 0.25, 0);
         await broadcastTelegram(
           '✅ LIMIT SELL\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + '💰 $0 perte | ' + dureeMin + 'min\n'
+          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) + ' (' + tpIndex + ' TP atteints)\n' : '💰 $0 perte\n')
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
@@ -609,7 +616,8 @@ async function snipe(mint, name, entryMC) {
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
         + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
-        + '✅ LIMIT SELL : $' + entryMC.toLocaleString() + ' MC (revente au prix d entree = $0 perte)\n==================\n'
+        + '📐 TP1 +20% | TP2 +40% | TP3 +60% | TP4 +100% (25% vendu a chaque)\n'
+        + '✅ SL : limit sell entree ($0 perte)\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint,
         true  // compte comme 1 snipe pour les abonnes essai
