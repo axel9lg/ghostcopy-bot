@@ -610,14 +610,11 @@ async function snipe(mint, name, entryMC) {
       stats.total++;
       sniped.add(mint);
 
-      const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
-
       await broadcastTelegram(
         '🎯 SNIPE\n==================\n'
         + '🪙 ' + name + '\n'
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
-        + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
         + '📐 TP1 +20% | TP2 +40% | TP3 +60% | TP4 +100% (25% chaque)\n'
         + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ' → break-even apres TP1\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
@@ -710,16 +707,15 @@ async function scanPumpFun() {
 }
 
 async function startSniper() {
-  console.log('[SNIPER] Actif — MOMENTUM — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — TP +' + TP_PCT + '% BREAK-EVEN');
+  console.log('[SNIPER] Actif — MOMENTUM — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — Multi-TP 20/40/60/100%');
   await sendTelegram(
-    '🎯 SNIPER v12 — BREAK-EVEN\n==================\n'
-    + '📡 Achete quand le token monte\n==================\n'
-    + '📊 Zone : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + ' MC\n'
-    + '⏱ Age : ' + MIN_AGE_SEC + 's - ' + (MAX_AGE_SEC / 60) + 'min\n==================\n'
+    '🎯 SNIPER v13 — MULTI-TP\n==================\n'
+    + '📡 Zone : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + ' MC\n'
+    + '⏱ Age max : ' + (MAX_AGE_SEC / 60) + 'min | Monitor : 1s\n==================\n'
     + '💰 Mise : $' + MISE_USD + ' | ' + MAX_OPEN + ' positions max\n'
-    + '🏆 TP : +' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + '\n'
-    + '✅ SL : break-even = $0 perte si ca redescend\n==================\n'
-    + '💀 Rug detecte en 6s\n'
+    + '📐 TP1 +20% (+$' + (MISE_USD*0.2*0.25).toFixed(0) + ') | TP2 +40% (+$' + (MISE_USD*0.4*0.25).toFixed(0) + ') | TP3 +60% (+$' + (MISE_USD*0.6*0.25).toFixed(0) + ') | TP4 +100% (+$' + (MISE_USD*1.0*0.25).toFixed(0) + ')\n'
+    + '🛑 SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ') → break-even apres TP1\n==================\n'
+    + '💀 Rug detecte en 1s\n'
     + '📉 Dump -30% : vente immediate\n'
     + '⏰ Max hold : 8 minutes\n'
     + '⚡ Jito bundles actifs\n==================\n'
