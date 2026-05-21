@@ -589,15 +589,6 @@ async function snipe(mint, name, entryMC) {
   if (Object.keys(positions).length >= MAX_OPEN) return;
   positions[mint] = { status: 'buying' };
 
-  // Verification liquidite avant achat : evite les rugs illiquides
-  const liquide = await checkLiquidite(mint);
-  if (!liquide) {
-    delete positions[mint];
-    stats.skipped++;
-    console.log('[SKIP] ' + name + ' — liquidite insuffisante (probable rug)');
-    return;
-  }
-
   for (let i = 1; i <= 3; i++) {
     try {
       const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + MISE_LAMPORTS + '&slippageBps=2000');
@@ -696,7 +687,6 @@ async function scanPumpFun() {
       if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
       if (coin.complete) continue;
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
-      if ((coin.reply_count || 0) < 2) { stats.skipped++; continue; } // au moins 2 commentaires = communaute reelle
 
       // Token en approche : surveiller depuis $5k
       if (mc >= WATCH_MIN_MC && mc < MIN_MC) {
