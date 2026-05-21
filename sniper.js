@@ -26,24 +26,24 @@ const TREASURY_WALLET = process.env.TREASURY_WALLET || '';          // wallet co
 let cofrageEnCours = false;
 
 // CONFIG — strategie momentum : achete quand ca monte
-const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
-const MISE_USD = 200;
+const MISE_LAMPORTS = 600000000;  // ~0.6 SOL (~$100)
+const MISE_USD = 100;
 const TP_LEVELS = [20, 40, 60, 100]; // vente 25% a chaque niveau
-// SL = prix d entree (limit sell au prix d achat = 0 perte)
+const SL_PCT = 10;                   // -10% = -$10 max (math : rentable des 20% win rate)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 3000;
+const MONITOR_INTERVAL = 1000;  // 1 seconde : detection 3x plus rapide
 const MAX_OPEN = 4;
 const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
 
 // Filtres
 const MIN_AGE_SEC = 10;
 const MAX_AGE_SEC = 120;        // max 2 minutes = tokens frais uniquement
-const MIN_MC = 6000;            // zone $6500
-const MAX_MC = 7500;            // zone $6500
+const MIN_MC = 13000;           // zone $15k (moins de rugs qu a $6k)
+const MAX_MC = 18000;           // zone $15k
 const MAX_LAST_TRADE_SEC = 120;
 const SCAN_INTERVAL = 5000;
-const WATCH_MIN_MC = 4500;      // surveille depuis $4500 pour capter le franchissement $6500
+const WATCH_MIN_MC = 11000;     // surveille depuis $11k
 
 // Jito
 const JITO_ENDPOINTS = [
@@ -419,7 +419,7 @@ async function sendSniperReport() {
     + '🏆 Wins : ' + stats.wins + ' | 🔴 Losses : ' + stats.losses + '\n'
     + '📊 Win rate : ' + winRate + '% (rentable a >25%)\n'
     + '🚫 Skips : ' + stats.skipped + '\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' | TP : +' + TP_PCT + '% (+$' + (MISE_USD * TP_PCT / 100) + ') | SL : limit sell entree\n'
+    + '💰 Mise : $' + MISE_USD + ' | TP1-4 : +20/40/60/100% | SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ')\n'
     + '📈 Gains : +$' + stats.totalGainUSD.toFixed(0) + '\n'
     + '📉 Pertes : -$' + stats.totalLossUSD.toFixed(0) + '\n'
     + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n==================\n'
@@ -432,7 +432,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   let consecutiveZeros = 0;
   let lastMC = entryMC;
   let peak = entryMC;
-  let slMC = entryMC; // limit sell au prix d entree = 0 perte
+  let slMC = Math.round(entryMC * (1 - SL_PCT / 100)); // hard SL -10% au depart
   let tpIndex = 0; // prochain niveau TP a atteindre (0=20%, 1=40%, 2=60%, 3=100%)
   const tpMCs = TP_LEVELS.map(pct => Math.round(entryMC * (1 + pct / 100)));
 
@@ -520,6 +520,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         const isLast = tpIndex === TP_LEVELS.length - 1;
         const gainUSD = (level / 100) * MISE_USD * 0.25;
         stats.totalGainUSD += gainUSD;
+        // Apres TP1 : SL remonte au prix d entree (0 perte sur le reste)
+        if (tpIndex === 0) slMC = entryMC;
         if (level > stats.bestGainPct) { stats.bestGainPct = level; stats.bestToken = name; }
         const sig = await sellToken(mint, 500, isLast ? 100 : 25);
         await broadcastTelegram(
@@ -616,8 +618,8 @@ async function snipe(mint, name, entryMC) {
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
         + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
-        + '📐 TP1 +20% | TP2 +40% | TP3 +60% | TP4 +100% (25% vendu a chaque)\n'
-        + '✅ SL : limit sell entree ($0 perte)\n==================\n'
+        + '📐 TP1 +20% | TP2 +40% | TP3 +60% | TP4 +100% (25% chaque)\n'
+        + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ' → break-even apres TP1\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint,
         true  // compte comme 1 snipe pour les abonnes essai
