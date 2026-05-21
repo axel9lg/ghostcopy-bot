@@ -1,4 +1,4 @@
-﻿if (process.env.NODE_ENV !== 'production') require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, SystemProgram } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
@@ -15,37 +15,52 @@ const myWallet = Keypair.fromSecretKey(bs58.default.decode(process.env.PRIVATE_K
 const SOL = 'So11111111111111111111111111111111111111112';
 
 // PAIEMENT
-const PRIX_TRIAL_SOL = process.env.PRIX_TRIAL_SOL || '0';          // essai gratuit
-const PRIX_MENSUEL_SOL = process.env.PRIX_MENSUEL_SOL || '0.5';    // acces mensuel
-const PAYMENT_WALLET = process.env.PAYMENT_WALLET || '';            // adresse SOL pour recevoir les paiements
+const PRIX_MENSUEL_SOL = process.env.PRIX_MENSUEL_SOL || '0.5';
+const PAYMENT_WALLET = process.env.PAYMENT_WALLET || '';
 
 // COFFRE AUTOMATIQUE
-const COFFRE_TRIGGER_USD = 700;   // quand le profit net atteint $700 → on coffre
-const COFFRE_AMOUNT_USD = 500;    // on envoie $500 au coffre
-const TREASURY_WALLET = process.env.TREASURY_WALLET || '';          // wallet coffre (configure sur Render)
+const COFFRE_TRIGGER_USD = 700;
+const COFFRE_AMOUNT_USD  = 500;
+const TREASURY_WALLET    = process.env.TREASURY_WALLET || '';
 let cofrageEnCours = false;
 
-// CONFIG — strategie momentum : achete quand ca monte
-const MISE_LAMPORTS = 1800000000; // ~1.8 SOL (~$300)
-const MISE_USD = 300;
-const TP_LEVELS = [30]; // TP unique +30% = +$90
-const SL_PCT = 10;     // -10% = -$30 max
-const JITO_FEE = 500000;
-const JITO_TIP = 1000000;
-const MONITOR_INTERVAL = 1000;  // 1 seconde : detection 3x plus rapide
-const MAX_OPEN = 4;
-const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
-
-// Filtres
-const MIN_AGE_SEC = 10;
-const MAX_AGE_SEC = 600;        // v11 : max 10 minutes
-const MIN_MC = 8000;            // v11 : $8k MC
-const MAX_MC = 60000;           // v11 : $60k MC
+// CONSTANTES GLOBALES
+const JITO_FEE         = 500000;
+const JITO_TIP         = 1000000;
+const MONITOR_INTERVAL = 1000;
+const MIN_AGE_SEC      = 10;
+const MAX_AGE_SEC      = 600;
 const MAX_LAST_TRADE_SEC = 120;
-const SCAN_INTERVAL = 5000;
-const WATCH_MIN_MC = 6000;      // surveille depuis $6k
 
-// Jito
+// ─── 3 STRATEGIES ────────────────────────────────────────────────────────────
+const STRATEGIES = [
+  {
+    id: 'low',    emoji: '🟢', name: 'LOW',
+    MISE_LAMPORTS: 600000000,   MISE_USD: 100,
+    TP_LEVELS: [20],            SL_PCT: 8,
+    MIN_MC: 15000, MAX_MC: 40000, WATCH_MIN_MC: 12000,
+    MIN_HOLDERS: 40, MAX_OPEN: 2,
+    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 7000,
+  },
+  {
+    id: 'medium', emoji: '🟡', name: 'MEDIUM',
+    MISE_LAMPORTS: 1200000000,  MISE_USD: 200,
+    TP_LEVELS: [30],            SL_PCT: 10,
+    MIN_MC: 8000,  MAX_MC: 60000, WATCH_MIN_MC: 6000,
+    MIN_HOLDERS: 25, MAX_OPEN: 2,
+    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
+  },
+  {
+    id: 'high',   emoji: '🔴', name: 'HIGH',
+    MISE_LAMPORTS: 1800000000,  MISE_USD: 300,
+    TP_LEVELS: [100],           SL_PCT: 10,
+    MIN_MC: 5000,  MAX_MC: 15000, WATCH_MIN_MC: 3500,
+    MIN_HOLDERS: 15, MAX_OPEN: 2,
+    MAX_HOLD_MS: 5 * 60 * 1000, SCAN_INTERVAL: 4000,
+  },
+];
+
+// JITO
 const JITO_ENDPOINTS = [
   'https://mainnet.block-engine.jito.labs.io/api/v1/bundles',
   'https://amsterdam.mainnet.block-engine.jito.labs.io/api/v1/bundles',
@@ -59,7 +74,7 @@ const JITO_TIP_ACCOUNTS = [
   'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1sMaC9yXJrL',
 ];
 
-const ADMIN_ID = String(process.env.TELEGRAM_CHAT_ID);
+const ADMIN_ID       = String(process.env.TELEGRAM_CHAT_ID);
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '@admin';
 const SUBSCRIBERS_FILE = './subscribers.json';
 
@@ -69,16 +84,23 @@ function saveSubscribers() {
   try { fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(subscribers, null, 2)); } catch(e) {}
 }
 
-const sniped = new Set();
-const positions = {};
-const watchlist = {};  // tokens $5k-$8k surveilles pour capter le franchissement
+// ─── ETAT PAR STRATEGIE ───────────────────────────────────────────────────────
+const positions = { low: {}, medium: {}, high: {} };
+const watchlist  = { low: {}, medium: {}, high: {} };
+const stats = {};
+for (const s of STRATEGIES) {
+  stats[s.id] = { total: 0, wins: 0, losses: 0, skipped: 0,
+                  totalGainUSD: 0, totalLossUSD: 0, bestGainPct: 0, bestToken: '' };
+}
+const sniped = new Set(); // partage entre strategies : evite double achat
 
-const stats = {
-  total: 0, wins: 0, losses: 0, skipped: 0,
-  totalGainUSD: 0, totalLossUSD: 0,
-  bestGainPct: 0, bestToken: ''
-};
+// ─── CACHE TOKENS (partage entre strategies) ──────────────────────────────────
+let tokenCache = [];
+let tokenCacheTime = 0;
+let tokenCacheFetching = false;
+const TOKEN_CACHE_TTL = 5000;
 
+// ─── TELEGRAM ─────────────────────────────────────────────────────────────────
 async function sendTo(chatId, msg) {
   try {
     await fetch('https://api.telegram.org/bot' + process.env.TELEGRAM_TOKEN + '/sendMessage', {
@@ -89,10 +111,8 @@ async function sendTo(chatId, msg) {
   } catch(e) {}
 }
 
-// Envoie uniquement a l admin
 async function sendTelegram(msg) { await sendTo(ADMIN_ID, msg); }
 
-// Envoie a l admin + tous les abonnes actifs (countAsSnipe = true pour decompter l essai)
 async function broadcastTelegram(msg, countAsSnipe = false) {
   await sendTo(ADMIN_ID, msg);
   for (const [id, sub] of Object.entries(subscribers)) {
@@ -105,7 +125,7 @@ async function broadcastTelegram(msg, countAsSnipe = false) {
       if (sub.snipesLeft <= 0) {
         sub.status = 'expired';
         saveSubscribers();
-        await sendTo(id, '⏰ ESSAI TERMINE\n==================\nVos 50 snipes gratuits sont epuises.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet 💎');
+        await sendTo(id, '⏰ ESSAI TERMINE\n==================\nVos snipes gratuits sont epuises.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet 💎');
       } else {
         saveSubscribers();
       }
@@ -123,22 +143,20 @@ async function pollTelegram() {
       lastUpdateId = update.update_id;
       const msg = update.message;
       if (!msg) continue;
-      const userId = String(msg.from.id);
-      const chatId = String(msg.chat.id);
+      const userId   = String(msg.from.id);
+      const chatId   = String(msg.chat.id);
       const username = msg.from.username ? '@' + msg.from.username : (msg.from.first_name || userId);
-      const text = (msg.text || '').trim();
-      const isAdmin = chatId === ADMIN_ID;
-      const cmd = text.toLowerCase().split(' ')[0];
-      const args = text.split(' ').slice(1);
+      const text     = (msg.text || '').trim();
+      const isAdmin  = chatId === ADMIN_ID;
+      const cmd      = text.toLowerCase().split(' ')[0];
+      const args     = text.split(' ').slice(1);
 
-      // Enregistrer l utilisateur inconnu
       if (!isAdmin && !subscribers[userId]) {
         subscribers[userId] = { username, status: 'pending', snipesLeft: 0, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
         saveSubscribers();
         await sendTelegram('🆕 NOUVEAU\n' + username + ' (ID: ' + userId + ')\na contacte le bot.');
       }
 
-      // --- COMMANDES UTILISATEUR ---
       if (cmd === '/start') {
         await sendTo(chatId,
           '👋 Bienvenue sur GhostCopy Sniper!\n==================\n'
@@ -153,8 +171,7 @@ async function pollTelegram() {
           '💎 ACCES MENSUEL ILLIMITE\n==================\n'
           + '💰 Prix : ' + PRIX_MENSUEL_SOL + ' SOL / mois\n==================\n'
           + '📤 Envoie exactement ' + PRIX_MENSUEL_SOL + ' SOL a :\n\n'
-          + wallet + '\n\n'
-          + '==================\n'
+          + wallet + '\n\n==================\n'
           + '✅ Ensuite envoie le lien de ta transaction a ' + ADMIN_USERNAME + '\n'
           + 'Ton acces sera active manuellement sous 24h.\n==================\n'
           + '🆓 Essai gratuit disponible : /trial'
@@ -169,7 +186,7 @@ async function pollTelegram() {
           subscribers[userId] = { username, status: 'active', snipesLeft: 999999, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
           saveSubscribers();
           await sendTo(chatId, '🎉 ESSAI ILLIMITE ACTIVE!\n==================\n✅ Acces gratuit illimite\nVous allez recevoir tous les signaux!\n==================\nPour un acces premium → ' + ADMIN_USERNAME);
-          await sendTelegram('🆕 ESSAI\n' + username + ' (ID: ' + userId + ')\na active un essai 50 snipes.');
+          await sendTelegram('🆕 ESSAI\n' + username + ' (ID: ' + userId + ')\na active un essai illimite.');
         }
       } else if (cmd === '/statut') {
         if (isAdmin) {
@@ -177,7 +194,7 @@ async function pollTelegram() {
         } else {
           const sub = subscribers[userId];
           if (!sub || sub.status === 'pending' || sub.status === 'inactive') {
-            await sendTo(chatId, '⛔ Pas d\'acces.\n/trial pour 50 snipes gratuits\n' + ADMIN_USERNAME + ' pour acces complet');
+            await sendTo(chatId, '⛔ Pas d\'acces.\n/trial pour essai gratuit\n' + ADMIN_USERNAME + ' pour acces complet');
           } else if (sub.status === 'trial') {
             await sendTo(chatId, '🆓 ESSAI EN COURS\n==================\n⚡ ' + sub.snipesLeft + ' snipes restants\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
           } else if (sub.status === 'active') {
@@ -191,18 +208,24 @@ async function pollTelegram() {
         if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport\n/positions — Positions';
         await sendTo(chatId, helpMsg);
 
-      // --- COMMANDES ADMIN ---
       } else if (isAdmin) {
         if (cmd === '/bilan') {
           await sendSniperReport();
         } else if (cmd === '/positions') {
-          const open = Object.entries(positions).filter(([, p]) => p.status === 'open');
-          if (!open.length) { await sendTelegram('📭 Aucune position ouverte'); }
-          else {
-            let posMsg = '📊 POSITIONS OUVERTES (' + open.length + '/' + MAX_OPEN + ')\n==================\n';
-            for (const [mint, pos] of open) posMsg += '🪙 ' + (pos.name || mint.slice(0, 8)) + ' — ' + Math.round((Date.now() - pos.buyTime) / 60000) + 'min\n';
-            await sendTelegram(posMsg);
+          let posMsg = '📊 POSITIONS OUVERTES\n==================\n';
+          let totalOpen = 0;
+          for (const strat of STRATEGIES) {
+            const open = Object.entries(positions[strat.id]).filter(([, p]) => p.status === 'open');
+            if (open.length) {
+              posMsg += strat.emoji + ' ' + strat.name + ' (' + open.length + '/' + strat.MAX_OPEN + ')\n';
+              for (const [mint, pos] of open) {
+                posMsg += '  🪙 ' + (pos.name || mint.slice(0, 8)) + ' — ' + Math.round((Date.now() - pos.buyTime) / 60000) + 'min\n';
+              }
+              totalOpen += open.length;
+            }
           }
+          if (!totalOpen) await sendTelegram('📭 Aucune position ouverte');
+          else await sendTelegram(posMsg);
         } else if (cmd === '/users') {
           const entries = Object.entries(subscribers);
           if (!entries.length) { await sendTelegram('📭 Aucun utilisateur'); }
@@ -253,6 +276,7 @@ async function pollTelegram() {
   } catch(e) { console.log('[TELEGRAM] Erreur poll : ' + e.message); }
 }
 
+// ─── PUMP.FUN API ─────────────────────────────────────────────────────────────
 const PUMP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'application/json',
@@ -290,6 +314,17 @@ async function getPumpTokens() {
   return merged;
 }
 
+async function getTokenCache() {
+  if (Date.now() - tokenCacheTime < TOKEN_CACHE_TTL) return tokenCache;
+  if (tokenCacheFetching) { await new Promise(r => setTimeout(r, 500)); return tokenCache; }
+  tokenCacheFetching = true;
+  try {
+    const fresh = await getPumpTokens();
+    if (fresh.length > 0) { tokenCache = fresh; tokenCacheTime = Date.now(); }
+  } finally { tokenCacheFetching = false; }
+  return tokenCache;
+}
+
 async function getPumpCoin(mint) {
   const urls = [
     'https://frontend-api-v3.pump.fun/coins/' + mint,
@@ -305,6 +340,7 @@ async function getPumpCoin(mint) {
   return null;
 }
 
+// ─── JITO / SWAP ──────────────────────────────────────────────────────────────
 async function submitViaJito(vtx) {
   const txBase64 = Buffer.from(vtx.serialize()).toString('base64');
   try {
@@ -360,6 +396,7 @@ async function sellToken(mint, slippageBps = 500, sellPct = 100) {
   } catch(e) { console.log('Erreur sell : ' + e.message); return null; }
 }
 
+// ─── COFFRE ───────────────────────────────────────────────────────────────────
 async function getSolPrice() {
   try {
     const r = await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112');
@@ -368,14 +405,19 @@ async function getSolPrice() {
   } catch(e) { return 0; }
 }
 
+function getTotalNet() {
+  let gain = 0, loss = 0;
+  for (const s of STRATEGIES) { gain += stats[s.id].totalGainUSD; loss += stats[s.id].totalLossUSD; }
+  return gain - loss;
+}
+
 async function coffreTresorie() {
   if (cofrageEnCours) return;
   cofrageEnCours = true;
   try {
     if (!TREASURY_WALLET) {
       await sendTelegram('⚠️ COFFRE : configure TREASURY_WALLET sur Render !');
-      cofrageEnCours = false;
-      return;
+      cofrageEnCours = false; return;
     }
     const solPrice = await getSolPrice();
     if (!solPrice) { await sendTelegram('⚠️ COFFRE : impossible de recuperer le prix SOL'); cofrageEnCours = false; return; }
@@ -385,212 +427,203 @@ async function coffreTresorie() {
       .add(SystemProgram.transfer({ fromPubkey: myWallet.publicKey, toPubkey: new PublicKey(TREASURY_WALLET), lamports }));
     tx.sign(myWallet);
     const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-    // Reset profit du cycle (on garde les compteurs wins/losses/total)
-    stats.totalGainUSD = 0;
-    stats.totalLossUSD = 0;
+    for (const s of STRATEGIES) { stats[s.id].totalGainUSD = 0; stats[s.id].totalLossUSD = 0; }
     const solEnvoye = (lamports / 1e9).toFixed(3);
     await sendTelegram(
       '🏦 COFFRE AUTOMATIQUE\n==================\n'
       + '💰 $' + COFFRE_AMOUNT_USD + ' coffrés (' + solEnvoye + ' SOL @ $' + Math.round(solPrice) + ')\n'
-      + '🔄 Nouveau cycle — capital $' + (COFFRE_TRIGGER_USD - COFFRE_AMOUNT_USD) + ' en jeu\n'
+      + '🔄 Nouveau cycle — stats remises a zero\n'
       + '🔗 https://solscan.io/tx/' + sig
     );
-  } catch(e) {
-    await sendTelegram('⚠️ COFFRE ECHEC : ' + e.message);
-  }
+  } catch(e) { await sendTelegram('⚠️ COFFRE ECHEC : ' + e.message); }
   cofrageEnCours = false;
 }
 
 async function checkCoffre() {
-  const net = stats.totalGainUSD - stats.totalLossUSD;
-  if (net >= COFFRE_TRIGGER_USD) await coffreTresorie();
+  if (getTotalNet() >= COFFRE_TRIGGER_USD) await coffreTresorie();
 }
 
+// ─── RAPPORT ──────────────────────────────────────────────────────────────────
 async function sendSniperReport() {
-  const winRate = stats.total > 0 ? Math.round((stats.wins / stats.total) * 100) : 0;
-  const net = stats.totalGainUSD - stats.totalLossUSD;
-  const netEmoji = net >= 0 ? '✅' : '🔴';
-  let recommandation;
-  if (winRate >= 40 && net > 0) recommandation = '💹 RENTABLE — Continue !';
-  else if (winRate >= 30) recommandation = '⚖️ PROCHE — Encore quelques trades';
-  else recommandation = '⚠️ EN DESSOUS — Marche difficile';
-  await sendTelegram(
-    '📊 BILAN ' + stats.total + ' SNIPES\n==================\n'
-    + '🏆 Wins : ' + stats.wins + ' | 🔴 Losses : ' + stats.losses + '\n'
-    + '📊 Win rate : ' + winRate + '% (rentable a >25%)\n'
-    + '🚫 Skips : ' + stats.skipped + '\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' | TP1-4 : +20/40/60/100% | SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ')\n'
-    + '📈 Gains : +$' + stats.totalGainUSD.toFixed(0) + '\n'
-    + '📉 Pertes : -$' + stats.totalLossUSD.toFixed(0) + '\n'
-    + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n==================\n'
-    + '🥇 Meilleur : +' + stats.bestGainPct + '% (' + (stats.bestToken || 'N/A') + ')\n==================\n'
-    + recommandation
-  );
+  let msg = '📊 BILAN SNIPER\n==================\n';
+  let grandTotal = 0, grandWins = 0, grandGain = 0, grandLoss = 0;
+
+  for (const strat of STRATEGIES) {
+    const s = stats[strat.id];
+    const wr  = s.total > 0 ? Math.round((s.wins / s.total) * 100) : 0;
+    const net = s.totalGainUSD - s.totalLossUSD;
+    msg += strat.emoji + ' ' + strat.name + ' — $' + strat.MISE_USD + '/mise\n';
+    msg += '  Trades : ' + s.total + ' | Wins : ' + s.wins + ' | Losses : ' + s.losses + ' | WR : ' + wr + '%\n';
+    msg += '  TP : +' + strat.TP_LEVELS.join('/+') + '% | SL : -' + strat.SL_PCT + '%\n';
+    msg += '  NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0);
+    if (s.bestToken) msg += ' | 🥇 +' + s.bestGainPct + '% (' + s.bestToken + ')';
+    msg += '\n\n';
+    grandTotal += s.total; grandWins += s.wins;
+    grandGain  += s.totalGainUSD; grandLoss += s.totalLossUSD;
+  }
+
+  const globalNet = grandGain - grandLoss;
+  const globalWR  = grandTotal > 0 ? Math.round((grandWins / grandTotal) * 100) : 0;
+  let reco;
+  if (globalWR >= 40 && globalNet > 0) reco = '💹 RENTABLE — Continue !';
+  else if (globalWR >= 30) reco = '⚖️ PROCHE — Encore quelques trades';
+  else reco = '⚠️ EN DESSOUS — Marche difficile';
+
+  msg += '==================\n';
+  msg += '📊 TOTAL : ' + grandTotal + ' trades | ' + globalWR + '% WR\n';
+  msg += (globalNet >= 0 ? '✅' : '🔴') + ' NET : ' + (globalNet >= 0 ? '+' : '') + '$' + globalNet.toFixed(0) + '\n';
+  msg += '==================\n' + reco;
+  await sendTelegram(msg);
 }
 
-async function monitorSnipe(mint, name, entryMC, buyTime) {
+// ─── MONITORING POSITION ──────────────────────────────────────────────────────
+async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
+  const st     = stats[strat.id];
+  const prefix = strat.emoji + ' ' + strat.name;
   let consecutiveZeros = 0;
   let lastMC = entryMC;
-  let peak = entryMC;
-  let slMC = Math.round(entryMC * (1 - SL_PCT / 100)); // hard SL -10% au depart
-  let tpIndex = 0; // prochain niveau TP a atteindre (0=20%, 1=40%, 2=60%, 3=100%)
-  const tpMCs = TP_LEVELS.map(pct => Math.round(entryMC * (1 + pct / 100)));
+  let slMC   = Math.round(entryMC * (1 - strat.SL_PCT / 100));
+  let tpIndex = 0;
+  const tpMCs = strat.TP_LEVELS.map(pct => Math.round(entryMC * (1 + pct / 100)));
 
   const interval = setInterval(async () => {
     try {
       const coin = await getPumpCoin(mint);
-      const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
+      const mc   = coin ? Math.round(coin.usd_market_cap || 0) : 0;
 
-      // Rug : MC = 0 une seule fois → vente urgence immediate
+      // RUG : MC = 0
       if (!mc) {
         consecutiveZeros++;
         if (consecutiveZeros >= 1) {
           clearInterval(interval);
-          delete positions[mint];
-          stats.losses++;
-          stats.totalLossUSD += MISE_USD;
+          delete positions[strat.id][mint];
+          st.losses++; st.totalLossUSD += strat.MISE_USD;
           const sig = await sellToken(mint, 3000);
           await broadcastTelegram(
-            '💀 RUG\n==================\n🪙 ' + name + '\n'
-            + '📉 Perte totale : -$' + MISE_USD + '\n'
+            '💀 RUG [' + prefix + ']\n==================\n🪙 ' + name + '\n'
+            + '📉 Perte totale : -$' + strat.MISE_USD + '\n'
             + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
           );
-          if (stats.total % 10 === 0) sendSniperReport();
+          if (st.total % 10 === 0) sendSniperReport();
           checkCoffre();
         }
         return;
       }
       consecutiveZeros = 0;
 
-      // Force sell apres 8 minutes
-      if (Date.now() - buyTime > MAX_HOLD_MS) {
+      // TIMEOUT
+      if (Date.now() - buyTime > strat.MAX_HOLD_MS) {
         clearInterval(interval);
         const gainPct = Math.round((mc / entryMC - 1) * 100);
-        const gainUSD = (gainPct / 100) * MISE_USD;
-        delete positions[mint];
-        if (gainUSD >= 0) { stats.wins++; stats.totalGainUSD += gainUSD; }
-        else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
+        const gainUSD = (gainPct / 100) * strat.MISE_USD;
+        delete positions[strat.id][mint];
+        if (gainUSD >= 0) { st.wins++; st.totalGainUSD += gainUSD; }
+        else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); }
         const sig = await sellToken(mint, 1000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
         await broadcastTelegram(
-          '⏰ 8MIN — VENTE FORCEE\n==================\n🪙 ' + name + '\n'
+          '⏰ TIMEOUT [' + prefix + ']\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
           + (gainPct >= 0 ? '💰 +' : '📉 ') + gainPct + '% (' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ')\n'
           + '⏱ Duree : ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
-        if (stats.total % 10 === 0) sendSniperReport();
+        if (st.total % 10 === 0) sendSniperReport();
         checkCoffre();
         return;
       }
 
-      // Dump rapide -30% en un check → vente urgence
+      // DUMP -30%
       const dropPct = lastMC > 0 ? Math.round((mc / lastMC - 1) * 100) : 0;
       lastMC = mc;
       if (dropPct <= -30) {
         clearInterval(interval);
-        const gainPct = Math.round((mc / entryMC - 1) * 100);
-        const perteUSD = Math.abs((gainPct / 100) * MISE_USD);
-        stats.losses++;
-        stats.totalLossUSD += perteUSD;
-        delete positions[mint];
+        const gainPct  = Math.round((mc / entryMC - 1) * 100);
+        const perteUSD = Math.abs((gainPct / 100) * strat.MISE_USD);
+        st.losses++; st.totalLossUSD += perteUSD;
+        delete positions[strat.id][mint];
         const sig = await sellToken(mint, 3000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
         await broadcastTelegram(
-          '📉 DUMP -' + Math.abs(dropPct) + '%\n==================\n🪙 ' + name + '\n'
+          '📉 DUMP -' + Math.abs(dropPct) + '% [' + prefix + ']\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
           + '📉 Perte : -$' + perteUSD.toFixed(0) + ' | ' + dureeMin + ' min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
-        if (stats.total % 10 === 0) sendSniperReport();
+        if (st.total % 10 === 0) sendSniperReport();
         checkCoffre();
         return;
       }
 
-      // Mise a jour du pic
-      if (mc > peak) peak = mc;
-      const gainPct = Math.round((mc / entryMC - 1) * 100);
+      const gainPct  = Math.round((mc / entryMC - 1) * 100);
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
+      console.log('[' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString() + ' (' + (gainPct >= 0 ? '+' : '') + gainPct + '%) | TP' + (tpIndex + 1) + ' $' + (tpMCs[tpIndex] || '✅').toLocaleString() + ' | ' + dureeMin + 'min');
 
-      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | TP' + (tpIndex + 1) + ' $' + (tpMCs[tpIndex] || '✅').toLocaleString() + ' | ' + dureeMin + 'min');
-
-      // MULTI-TP : vente 25% a chaque niveau
-      while (tpIndex < TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
-        const level = TP_LEVELS[tpIndex];
-        const isLast = tpIndex === TP_LEVELS.length - 1;
-        const gainUSD = (level / 100) * MISE_USD / TP_LEVELS.length;
-        stats.totalGainUSD += gainUSD;
-        // Apres TP1 : SL remonte au prix d entree (0 perte sur le reste)
+      // MULTI-TP
+      while (tpIndex < strat.TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
+        const level  = strat.TP_LEVELS[tpIndex];
+        const isLast = tpIndex === strat.TP_LEVELS.length - 1;
+        const gainUSD = (level / 100) * strat.MISE_USD / strat.TP_LEVELS.length;
+        st.totalGainUSD += gainUSD;
         if (tpIndex === 0) slMC = entryMC;
-        if (level > stats.bestGainPct) { stats.bestGainPct = level; stats.bestToken = name; }
-        const sellPct = isLast ? 100 : Math.round(100 / (TP_LEVELS.length - tpIndex));
+        if (level > st.bestGainPct) { st.bestGainPct = level; st.bestToken = name; }
+        const sellPct = isLast ? 100 : Math.round(100 / (strat.TP_LEVELS.length - tpIndex));
         const sig = await sellToken(mint, 500, sellPct);
         await broadcastTelegram(
-          '🏆 TP ' + (tpIndex + 1) + '/4 +' + level + '%\n==================\n🪙 ' + name + '\n'
+          '🏆 TP' + (tpIndex + 1) + '/' + strat.TP_LEVELS.length + ' +' + level + '% [' + prefix + ']\n==================\n🪙 ' + name + '\n'
           + '📊 MC : $' + mc.toLocaleString() + ' | Entree : $' + entryMC.toLocaleString() + '\n'
-          + '💰 +$' + gainUSD.toFixed(0) + ' (25% vendu)\n'
+          + '💰 +$' + gainUSD.toFixed(0) + ' vendu\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         tpIndex++;
         if (isLast) {
           clearInterval(interval);
-          stats.wins++;
-          delete positions[mint];
-          if (stats.total % 10 === 0) sendSniperReport();
+          st.wins++;
+          delete positions[strat.id][mint];
+          if (st.total % 10 === 0) sendSniperReport();
           checkCoffre();
           return;
         }
       }
 
-      // LIMIT SELL au prix d entree : revente du reste = 0 perte
+      // SL / BREAK-EVEN
       if (mc <= slMC) {
         clearInterval(interval);
-        if (tpIndex > 0) { stats.wins++; } // a deja pris des profits
-        delete positions[mint];
+        if (tpIndex > 0) {
+          st.wins++;
+        } else {
+          st.losses++;
+          st.totalLossUSD += (strat.SL_PCT / 100) * strat.MISE_USD;
+        }
+        delete positions[strat.id][mint];
         const sig = await sellToken(mint, 800, 100);
-        const profitDeja = TP_LEVELS.slice(0, tpIndex).reduce((s, pct) => s + (pct / 100) * MISE_USD * 0.25, 0);
+        const profitDeja = strat.TP_LEVELS.slice(0, tpIndex).reduce((acc, pct) => acc + (pct / 100) * strat.MISE_USD / strat.TP_LEVELS.length, 0);
         await broadcastTelegram(
-          '✅ LIMIT SELL\n==================\n🪙 ' + name + '\n'
+          (tpIndex > 0 ? '✅ BREAK-EVEN' : '🛑 SL -' + strat.SL_PCT + '%') + ' [' + prefix + ']\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) + ' (' + tpIndex + ' TP atteints)\n' : '💰 $0 perte\n')
+          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) : '💸 Perte : -$' + ((strat.SL_PCT / 100) * strat.MISE_USD).toFixed(0)) + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
-        if (stats.total % 10 === 0) sendSniperReport();
+        if (st.total % 10 === 0) sendSniperReport();
         checkCoffre();
       }
     } catch(e) {}
   }, MONITOR_INTERVAL);
 }
 
-async function checkLiquidite(mint) {
-  try {
-    // Test achat 10% de la mise pour verifier la liquidite
-    const testLamports = Math.round(MISE_LAMPORTS * 0.1);
-    const buyQr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + testLamports + '&slippageBps=5000');
-    const buyQ = await buyQr.json();
-    if (!buyQ.outAmount) return false;
-    // Test revente immediate pour mesurer la liquidite reelle
-    const sellQr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + mint + '&outputMint=' + SOL + '&amount=' + buyQ.outAmount + '&slippageBps=5000');
-    const sellQ = await sellQr.json();
-    if (!sellQ.outAmount) return false;
-    // Aller-retour : si on recupere moins de 55% c est illiquide → probable rug
-    const ratio = sellQ.outAmount / testLamports;
-    console.log('[LIQ] ' + mint.slice(0, 8) + ' ratio aller-retour : ' + Math.round(ratio * 100) + '%');
-    return ratio >= 0.55;
-  } catch(e) { return true; }
-}
-
-async function snipe(mint, name, entryMC) {
-  if (positions[mint]) return;
-  if (Object.keys(positions).length >= MAX_OPEN) return;
-  positions[mint] = { status: 'buying' };
+// ─── ACHAT ────────────────────────────────────────────────────────────────────
+async function snipe(mint, name, entryMC, strat) {
+  if (STRATEGIES.some(s => positions[s.id][mint])) return;
+  if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) return;
+  positions[strat.id][mint] = { status: 'buying' };
+  const st = stats[strat.id];
 
   for (let i = 1; i <= 3; i++) {
     try {
-      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + MISE_LAMPORTS + '&slippageBps=2000');
-      const q = await qr.json();
+      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + strat.MISE_LAMPORTS + '&slippageBps=2000');
+      const q  = await qr.json();
       if (!q.outAmount) {
-        if (i === 3) { delete positions[mint]; await sendTelegram('❌ ECHEC\n🪙 ' + name + '\nNon swappable'); }
+        if (i === 3) { delete positions[strat.id][mint]; await sendTelegram('❌ ECHEC\n🪙 ' + name + '\nNon swappable'); }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
@@ -607,127 +640,131 @@ async function snipe(mint, name, entryMC) {
       const sig = await submitViaJito(vtx);
 
       const buyTime = Date.now();
-      positions[mint] = { status: 'open', buyTime, sig, name };
-      stats.total++;
+      positions[strat.id][mint] = { status: 'open', buyTime, sig, name };
+      st.total++;
       sniped.add(mint);
 
+      const tpStr = strat.TP_LEVELS.map((tp, idx) => 'TP' + (idx + 1) + ' +' + tp + '%').join(' | ');
       await broadcastTelegram(
-        '🎯 SNIPE\n==================\n'
+        '🎯 SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
         + '🪙 ' + name + '\n'
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
-        + '💰 Mise : $' + MISE_USD + '\n'
-        + '📐 TP1 +20% | TP2 +40% | TP3 +60% | TP4 +100% (25% chaque)\n'
-        + '🛑 SL : -' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ' → break-even apres TP1\n==================\n'
+        + '💰 Mise : $' + strat.MISE_USD + '\n'
+        + '📐 ' + tpStr + '\n'
+        + '🛑 SL : -' + strat.SL_PCT + '% (-$' + (strat.MISE_USD * strat.SL_PCT / 100).toFixed(0) + ') → break-even apres TP1\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint,
-        true  // compte comme 1 snipe pour les abonnes essai
+        true
       );
-      monitorSnipe(mint, name, entryMC, buyTime);
+      monitorSnipe(mint, name, entryMC, buyTime, strat);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
-      if (i === 3) delete positions[mint];
+      if (i === 3) delete positions[strat.id][mint];
       await new Promise(r => setTimeout(r, 1000));
     }
   }
 }
 
-// Watchlist : surveille tokens $5k-$8k et achete au franchissement du seuil
-async function checkWatchlist() {
-  const entries = Object.entries(watchlist);
-  if (entries.length === 0) return;
+// ─── WATCHLIST ────────────────────────────────────────────────────────────────
+async function checkWatchlist(strat) {
+  const entries = Object.entries(watchlist[strat.id]);
+  if (!entries.length) return;
   for (const [mint, info] of entries) {
-    if (sniped.has(mint) || positions[mint]) { delete watchlist[mint]; continue; }
-    if (Date.now() - info.addedAt > MAX_AGE_SEC * 1000) { delete watchlist[mint]; continue; }
+    if (sniped.has(mint) || STRATEGIES.some(s => positions[s.id][mint])) { delete watchlist[strat.id][mint]; continue; }
+    if (Date.now() - info.addedAt > MAX_AGE_SEC * 1000) { delete watchlist[strat.id][mint]; continue; }
     try {
       const coin = await getPumpCoin(mint);
-      const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
-      if (!mc) { delete watchlist[mint]; continue; }
-      console.log('[WATCH] ' + info.name + ' | $' + mc.toLocaleString() + ' → seuil $' + MIN_MC.toLocaleString());
-      if (mc >= MIN_MC && mc <= MAX_MC) {
-        delete watchlist[mint];
-        if (Object.keys(positions).length < MAX_OPEN) {
-          console.log('[ENTRY] ' + info.name + ' franchit $' + mc.toLocaleString() + ' → ACHAT MOMENTUM');
-          await snipe(mint, info.name, mc);
+      const mc   = coin ? Math.round(coin.usd_market_cap || 0) : 0;
+      if (!mc) { delete watchlist[strat.id][mint]; continue; }
+      console.log('[WATCH/' + strat.id.toUpperCase() + '] ' + info.name + ' | $' + mc.toLocaleString() + ' → seuil $' + strat.MIN_MC.toLocaleString());
+      if (mc >= strat.MIN_MC && mc <= strat.MAX_MC) {
+        delete watchlist[strat.id][mint];
+        if (Object.keys(positions[strat.id]).length < strat.MAX_OPEN) {
+          console.log('[ENTRY/' + strat.id.toUpperCase() + '] ' + info.name + ' → ACHAT $' + mc.toLocaleString());
+          await snipe(mint, info.name, mc, strat);
         }
       }
     } catch(e) {}
   }
 }
 
-async function scanPumpFun() {
+// ─── SCAN ─────────────────────────────────────────────────────────────────────
+async function scanPumpFun(strat) {
   try {
-    const tokens = await getPumpTokens();
+    const tokens = await getTokenCache();
     if (!tokens || tokens.length === 0) {
-      console.log('[SCAN] API injoignable — retry dans ' + (SCAN_INTERVAL / 1000) + 's');
+      console.log('[SCAN/' + strat.id.toUpperCase() + '] API injoignable — retry');
       return;
     }
 
+    const st  = stats[strat.id];
     const now = Date.now() / 1000;
-    let total = 0, tooYoung = 0, tooOld = 0, mcTooLow = 0, mcTooHigh = 0, inactive = 0, candidates = 0;
+    let total = 0, tooYoung = 0, tooOld = 0, mcLow = 0, mcHigh = 0, inactive = 0, candidates = 0;
 
     for (const coin of tokens) {
-      if (!coin.mint || sniped.has(coin.mint) || positions[coin.mint] || watchlist[coin.mint]) continue;
+      if (!coin.mint || sniped.has(coin.mint)) continue;
+      if (STRATEGIES.some(s => positions[s.id][coin.mint])) continue;
+      if (watchlist[strat.id][coin.mint]) continue;
       total++;
 
-      const createdSec = coin.created_timestamp > 1e12 ? coin.created_timestamp / 1000 : coin.created_timestamp;
-      const ageSec = now - createdSec;
-      const mc = Math.round(coin.usd_market_cap || 0);
+      const createdSec  = coin.created_timestamp > 1e12 ? coin.created_timestamp / 1000 : coin.created_timestamp;
+      const ageSec      = now - createdSec;
+      const mc          = Math.round(coin.usd_market_cap || 0);
       const lastTradeRaw = coin.last_trade_unix_time || 0;
       const lastTradeSec = lastTradeRaw > 1e12 ? now - (lastTradeRaw / 1000) : (lastTradeRaw > 0 ? now - lastTradeRaw : 0);
-      const name = coin.symbol || coin.name || coin.mint.slice(0, 8);
+      const name        = coin.symbol || coin.name || coin.mint.slice(0, 8);
 
-      if (ageSec < MIN_AGE_SEC) { tooYoung++; continue; }
-      if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
-      if (coin.complete) continue;
-      if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
-      if ((coin.holder_count || 0) < 25) { stats.skipped++; continue; } // moins de 25 holders = probable rug
+      if (ageSec < MIN_AGE_SEC)                                  { tooYoung++; continue; }
+      if (ageSec > MAX_AGE_SEC)                                  { tooOld++;   continue; }
+      if (coin.complete)                                         continue;
+      if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++;  continue; }
+      if ((coin.holder_count || 0) < strat.MIN_HOLDERS)          { st.skipped++; continue; }
 
-      // Token en approche : surveiller depuis $5k
-      if (mc >= WATCH_MIN_MC && mc < MIN_MC) {
-        watchlist[coin.mint] = { name, addedAt: Date.now() };
-        console.log('[WATCH] ' + name + ' | $' + mc.toLocaleString() + ' → surveillance');
+      if (mc >= strat.WATCH_MIN_MC && mc < strat.MIN_MC) {
+        watchlist[strat.id][coin.mint] = { name, addedAt: Date.now() };
+        console.log('[WATCH/' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString());
         continue;
       }
 
-      if (mc < MIN_MC) { mcTooLow++; continue; }
-      if (mc > MAX_MC) { mcTooHigh++; continue; }
+      if (mc < strat.MIN_MC)  { mcLow++;  continue; }
+      if (mc > strat.MAX_MC)  { mcHigh++; continue; }
 
-      // Token en zone momentum → achat immediat
       candidates++;
-      console.log('[CANDIDAT] ' + name + ' | $' + mc.toLocaleString() + ' MC | age ' + Math.round(ageSec) + 's');
+      console.log('[' + strat.id.toUpperCase() + '] CANDIDAT ' + name + ' | $' + mc.toLocaleString() + ' | age ' + Math.round(ageSec) + 's');
 
-      if (Object.keys(positions).length >= MAX_OPEN) { stats.skipped++; continue; }
-      await snipe(coin.mint, name, mc);
+      if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) { st.skipped++; continue; }
+      await snipe(coin.mint, name, mc, strat);
       break;
     }
 
-    console.log('[SCAN] ' + total + ' tokens | frais:' + tooYoung + ' vieux:' + tooOld + ' MC bas:' + mcTooLow + ' MC haut:' + mcTooHigh + ' inactifs:' + inactive + ' skips:' + stats.skipped + ' watch:' + Object.keys(watchlist).length + ' → ' + candidates + ' candidat(s)');
+    console.log('[' + strat.id.toUpperCase() + '] ' + total + ' tokens | jeunes:' + tooYoung + ' vieux:' + tooOld + ' MC-:' + mcLow + ' MC+:' + mcHigh + ' inactifs:' + inactive + ' watch:' + Object.keys(watchlist[strat.id]).length + ' → ' + candidates + ' candidat(s)');
   } catch(e) {
-    console.log('[SCAN] Erreur : ' + e.message);
+    console.log('[SCAN/' + strat.id.toUpperCase() + '] Erreur : ' + e.message);
   }
 }
 
+// ─── DEMARRAGE ────────────────────────────────────────────────────────────────
 async function startSniper() {
-  console.log('[SNIPER] Actif — MOMENTUM — MC $' + MIN_MC.toLocaleString() + '-$' + MAX_MC.toLocaleString() + ' — Multi-TP 20/40/60/100%');
+  console.log('[SNIPER] v14 — 3 strategies simultanees : LOW / MEDIUM / HIGH');
+  const lines = STRATEGIES.map(s =>
+    s.emoji + ' ' + s.name + ' — $' + s.MISE_USD + '/mise | $' + s.MIN_MC.toLocaleString() + '-$' + s.MAX_MC.toLocaleString() + ' | TP +' + s.TP_LEVELS.join('/+') + '% | SL -' + s.SL_PCT + '% | ≥' + s.MIN_HOLDERS + ' holders'
+  ).join('\n');
   await sendTelegram(
-    '🎯 SNIPER v13 — MULTI-TP\n==================\n'
-    + '📡 Zone : $' + MIN_MC.toLocaleString() + ' - $' + MAX_MC.toLocaleString() + ' MC\n'
-    + '⏱ Age max : ' + (MAX_AGE_SEC / 60) + 'min | Monitor : 1s\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' | ' + MAX_OPEN + ' positions max\n'
-    + '📐 TP1 +20% (+$' + (MISE_USD*0.2*0.25).toFixed(0) + ') | TP2 +40% (+$' + (MISE_USD*0.4*0.25).toFixed(0) + ') | TP3 +60% (+$' + (MISE_USD*0.6*0.25).toFixed(0) + ') | TP4 +100% (+$' + (MISE_USD*1.0*0.25).toFixed(0) + ')\n'
-    + '🛑 SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ') → break-even apres TP1\n==================\n'
-    + '💀 Rug detecte en 1s\n'
+    '🎯 SNIPER v14 — 3 STRATEGIES\n==================\n'
+    + lines + '\n==================\n'
+    + '💀 Rug detecte en 1s | ⏰ Timeout auto\n'
     + '📉 Dump -30% : vente immediate\n'
-    + '⏰ Max hold : 8 minutes\n'
     + '⚡ Jito bundles actifs\n==================\n'
     + '/bilan /positions /aide'
   );
 
-  setInterval(() => scanPumpFun(), SCAN_INTERVAL);
-  setInterval(() => checkWatchlist(), 3000);
+  for (const strat of STRATEGIES) {
+    setInterval(() => scanPumpFun(strat), strat.SCAN_INTERVAL);
+    setInterval(() => checkWatchlist(strat), 3000);
+    scanPumpFun(strat);
+  }
   setInterval(() => pollTelegram(), 3000);
-  scanPumpFun();
 }
 
 startSniper();
