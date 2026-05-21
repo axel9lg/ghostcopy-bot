@@ -38,12 +38,12 @@ const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
 
 // Filtres
 const MIN_AGE_SEC = 10;
-const MAX_AGE_SEC = 600;        // max 10 minutes
-const MIN_MC = 65000;           // zone $70k
-const MAX_MC = 75000;           // zone $70k
+const MAX_AGE_SEC = 120;        // max 2 minutes = tokens frais uniquement
+const MIN_MC = 6000;            // zone $6500
+const MAX_MC = 7500;            // zone $6500
 const MAX_LAST_TRADE_SEC = 120;
 const SCAN_INTERVAL = 5000;
-const WATCH_MIN_MC = 60000;     // surveille depuis $60k pour capter le franchissement $70k
+const WATCH_MIN_MC = 4500;      // surveille depuis $4500 pour capter le franchissement $6500
 
 // Jito
 const JITO_ENDPOINTS = [
