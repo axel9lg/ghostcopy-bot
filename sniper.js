@@ -26,10 +26,10 @@ const TREASURY_WALLET = process.env.TREASURY_WALLET || '';          // wallet co
 let cofrageEnCours = false;
 
 // CONFIG — strategie momentum : achete quand ca monte
-const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
-const MISE_USD = 200;
-const TP_LEVELS = [20, 40, 60, 100]; // vente 25% a chaque niveau
-const SL_PCT = 10;                   // -10% = -$10 max (math : rentable des 20% win rate)
+const MISE_LAMPORTS = 1800000000; // ~1.8 SOL (~$300)
+const MISE_USD = 300;
+const TP_LEVELS = [10, 30, 50]; // vente 1/3 a chaque niveau
+const SL_PCT = 10;              // -10% = -$30 max → break-even apres TP1
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
 const MONITOR_INTERVAL = 1000;  // 1 seconde : detection 3x plus rapide
@@ -518,12 +518,13 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       while (tpIndex < TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
         const level = TP_LEVELS[tpIndex];
         const isLast = tpIndex === TP_LEVELS.length - 1;
-        const gainUSD = (level / 100) * MISE_USD * 0.25;
+        const gainUSD = (level / 100) * MISE_USD / TP_LEVELS.length;
         stats.totalGainUSD += gainUSD;
         // Apres TP1 : SL remonte au prix d entree (0 perte sur le reste)
         if (tpIndex === 0) slMC = entryMC;
         if (level > stats.bestGainPct) { stats.bestGainPct = level; stats.bestToken = name; }
-        const sig = await sellToken(mint, 500, isLast ? 100 : 25);
+        const sellPct = isLast ? 100 : Math.round(100 / (TP_LEVELS.length - tpIndex));
+        const sig = await sellToken(mint, 500, sellPct);
         await broadcastTelegram(
           '🏆 TP ' + (tpIndex + 1) + '/4 +' + level + '%\n==================\n🪙 ' + name + '\n'
           + '📊 MC : $' + mc.toLocaleString() + ' | Entree : $' + entryMC.toLocaleString() + '\n'
