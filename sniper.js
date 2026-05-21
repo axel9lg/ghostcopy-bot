@@ -143,8 +143,8 @@ async function pollTelegram() {
         await sendTo(chatId,
           '👋 Bienvenue sur GhostCopy Sniper!\n==================\n'
           + '🤖 Signaux de snipe Pump.fun en temps reel\n==================\n'
-          + '🆓 /trial — Essai 50 snipes gratuit\n'
-          + '💎 /payer — Acces mensuel illimite\n==================\n'
+          + '🆓 /trial — Essai gratuit illimite\n'
+          + '💎 /payer — Acces premium\n==================\n'
           + '/statut — Mon acces\n/aide — Aide'
         );
       } else if (cmd === '/payer' && !isAdmin) {
@@ -166,9 +166,9 @@ async function pollTelegram() {
         } else if (sub && sub.status === 'expired') {
           await sendTo(chatId, '⛔ Essai termine.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet.');
         } else {
-          subscribers[userId] = { username, status: 'trial', snipesLeft: 50, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+          subscribers[userId] = { username, status: 'active', snipesLeft: 999999, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
           saveSubscribers();
-          await sendTo(chatId, '🎉 ESSAI ACTIVE!\n==================\n✅ 50 snipes gratuits offerts\nVous allez recevoir tous les signaux!\n==================\nPour un acces illimite → ' + ADMIN_USERNAME);
+          await sendTo(chatId, '🎉 ESSAI ILLIMITE ACTIVE!\n==================\n✅ Acces gratuit illimite\nVous allez recevoir tous les signaux!\n==================\nPour un acces premium → ' + ADMIN_USERNAME);
           await sendTelegram('🆕 ESSAI\n' + username + ' (ID: ' + userId + ')\na active un essai 50 snipes.');
         }
       } else if (cmd === '/statut') {
@@ -187,7 +187,7 @@ async function pollTelegram() {
           }
         }
       } else if (cmd === '/aide') {
-        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai 50 snipes gratuit\n/payer — Acces mensuel illimite\n/statut — Mon acces\n/aide — Cette liste';
+        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai gratuit illimite\n/payer — Acces premium\n/statut — Mon acces\n/aide — Cette liste';
         if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport\n/positions — Positions';
         await sendTo(chatId, helpMsg);
 
