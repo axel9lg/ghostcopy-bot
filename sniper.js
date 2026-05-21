@@ -28,8 +28,9 @@ let cofrageEnCours = false;
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 10;          // +10% = +$20
-// Pas de SL : on revend toujours au prix d entree (break-even = 0 perte)
+const TP_PCT = 20;          // +20% = +$40
+const SL_PCT = 15;          // -15% = -$30 max (anti-rug)
+const BREAK_EVEN_PCT = 10;  // a +10% : SL remonte au prix d entree (0 perte)
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
 const MONITOR_INTERVAL = 3000;
@@ -417,7 +418,7 @@ async function sendSniperReport() {
     + '🏆 Wins : ' + stats.wins + ' | 🔴 Losses : ' + stats.losses + '\n'
     + '📊 Win rate : ' + winRate + '% (rentable a >25%)\n'
     + '🚫 Skips : ' + stats.skipped + '\n==================\n'
-    + '💰 Mise : $' + MISE_USD + ' | TP : +' + TP_PCT + '% (+$' + (MISE_USD * TP_PCT / 100) + ') | SL : break-even ($0 perte)\n'
+    + '💰 Mise : $' + MISE_USD + ' | TP : +' + TP_PCT + '% (+$' + (MISE_USD * TP_PCT / 100) + ') | SL : -' + SL_PCT + '% (-$' + (MISE_USD * SL_PCT / 100) + ')\n'
     + '📈 Gains : +$' + stats.totalGainUSD.toFixed(0) + '\n'
     + '📉 Pertes : -$' + stats.totalLossUSD.toFixed(0) + '\n'
     + netEmoji + ' NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n==================\n'
@@ -430,8 +431,10 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   let consecutiveZeros = 0;
   let lastMC = entryMC;
   let peak = entryMC;
-  let slMC = entryMC; // break-even depuis le debut : jamais en perte
+  let slMC = Math.round(entryMC * (1 - SL_PCT / 100)); // hard SL -15%
+  let breakEvenDone = false;
   const tpMC = Math.round(entryMC * (1 + TP_PCT / 100));
+  const breakEvenMC = Math.round(entryMC * (1 + BREAK_EVEN_PCT / 100));
 
   const interval = setInterval(async () => {
     try {
@@ -509,7 +512,14 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       const gainPct = Math.round((mc / entryMC - 1) * 100);
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
 
-      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | PIC $' + peak.toLocaleString() + ' | BE $' + slMC.toLocaleString() + ' | ' + dureeMin + 'min');
+      // Break-even : a +10% le SL remonte au prix d entree
+      if (!breakEvenDone && mc >= breakEvenMC) {
+        breakEvenDone = true;
+        slMC = entryMC;
+        console.log('[BE] ' + name + ' | +' + BREAK_EVEN_PCT + '% atteint → SL a $' + entryMC.toLocaleString());
+      }
+
+      console.log('[POS] ' + name + ' | $' + mc.toLocaleString() + ' (+' + gainPct + '%) | SL $' + slMC.toLocaleString() + (breakEvenDone ? ' [BE]' : '') + ' | ' + dureeMin + 'min');
 
       // TAKE PROFIT
       if (mc >= tpMC) {
@@ -533,16 +543,20 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
         return;
       }
 
-      // BREAK-EVEN : revente au prix d entree si ca redescend
+      // SL (hard -15% ou break-even selon le niveau atteint)
       if (mc <= slMC) {
         clearInterval(interval);
-        stats.wins++;
+        const gainUSD = (gainPct / 100) * MISE_USD;
+        if (gainUSD >= 0) { stats.wins++; stats.totalGainUSD += gainUSD; }
+        else { stats.losses++; stats.totalLossUSD += Math.abs(gainUSD); }
         delete positions[mint];
-        const sig = await sellToken(mint, 800);
+        const slippage = breakEvenDone ? 800 : 2000;
+        const sig = await sellToken(mint, slippage);
+        const label = breakEvenDone ? '✅ BREAK-EVEN STOP' : '🔴 STOP LOSS -' + SL_PCT + '%';
         await broadcastTelegram(
-          '✅ BREAK-EVEN\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Pic : $' + peak.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + '💰 $0 perte | ' + dureeMin + 'min\n'
+          label + '\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
+          + (gainUSD >= 0 ? '💰 +' : '📉 ') + gainPct + '% = ' + (gainUSD >= 0 ? '+' : '') + '$' + gainUSD.toFixed(0) + ' | ' + dureeMin + 'min\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (stats.total % 10 === 0) sendSniperReport();
@@ -591,7 +605,7 @@ async function snipe(mint, name, entryMC) {
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
         + '💰 Mise : $' + MISE_USD + '\n'
         + '🏆 TP : $' + tpMC.toLocaleString() + ' MC (+' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100) + ')\n'
-        + '✅ SL : $' + entryMC.toLocaleString() + ' MC (break-even = $0 perte)\n==================\n'
+        + '🛑 SL : $' + Math.round(entryMC * (1 - SL_PCT / 100)).toLocaleString() + ' MC (-' + SL_PCT + '% = -$' + (MISE_USD * SL_PCT / 100) + ') → break-even a +' + BREAK_EVEN_PCT + '%\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint,
         true  // compte comme 1 snipe pour les abonnes essai
