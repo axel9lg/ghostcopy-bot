@@ -28,8 +28,8 @@ let cofrageEnCours = false;
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1800000000; // ~1.8 SOL (~$300)
 const MISE_USD = 300;
-const TP_LEVELS = [10, 30, 50]; // vente 1/3 a chaque niveau
-const SL_PCT = 10;              // -10% = -$30 max → break-even apres TP1
+const TP_LEVELS = [30]; // TP unique +30% = +$90
+const SL_PCT = 10;     // -10% = -$30 max
 const JITO_FEE = 500000;
 const JITO_TIP = 1000000;
 const MONITOR_INTERVAL = 1000;  // 1 seconde : detection 3x plus rapide
@@ -38,12 +38,12 @@ const MAX_HOLD_MS = 8 * 60 * 1000; // force sell apres 8 minutes
 
 // Filtres
 const MIN_AGE_SEC = 10;
-const MAX_AGE_SEC = 120;        // max 2 minutes = tokens frais uniquement
-const MIN_MC = 13000;           // zone $15k (moins de rugs qu a $6k)
-const MAX_MC = 18000;           // zone $15k
+const MAX_AGE_SEC = 600;        // v11 : max 10 minutes
+const MIN_MC = 8000;            // v11 : $8k MC
+const MAX_MC = 60000;           // v11 : $60k MC
 const MAX_LAST_TRADE_SEC = 120;
 const SCAN_INTERVAL = 5000;
-const WATCH_MIN_MC = 11000;     // surveille depuis $11k
+const WATCH_MIN_MC = 6000;      // surveille depuis $6k
 
 // Jito
 const JITO_ENDPOINTS = [
