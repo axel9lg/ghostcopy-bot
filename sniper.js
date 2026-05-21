@@ -28,7 +28,7 @@ let cofrageEnCours = false;
 // CONFIG — strategie momentum : achete quand ca monte
 const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
 const MISE_USD = 200;
-const TP_PCT = 30;          // +30% = +$60
+const TP_PCT = 100;         // +100% = +$200
 const SL_PCT = 10;          // -10% = -$20 max
 const BREAK_EVEN_PCT = 10;  // a +10% : SL remonte au prix d entree (0 perte)
 const JITO_FEE = 500000;
