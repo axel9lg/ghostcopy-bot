@@ -26,8 +26,8 @@ const TREASURY_WALLET = process.env.TREASURY_WALLET || '';          // wallet co
 let cofrageEnCours = false;
 
 // CONFIG — strategie momentum : achete quand ca monte
-const MISE_LAMPORTS = 600000000;  // ~0.6 SOL (~$100)
-const MISE_USD = 100;
+const MISE_LAMPORTS = 1200000000; // ~1.2 SOL (~$200)
+const MISE_USD = 200;
 const TP_LEVELS = [20, 40, 60, 100]; // vente 25% a chaque niveau
 const SL_PCT = 10;                   // -10% = -$10 max (math : rentable des 20% win rate)
 const JITO_FEE = 500000;
