@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node bot.js",
     "sniper": "node sniper.js",
+    "paper": "node sniper.js --paper",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

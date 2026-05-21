@@ -18,6 +18,9 @@ const SOL = 'So11111111111111111111111111111111111111112';
 const PRIX_MENSUEL_SOL = process.env.PRIX_MENSUEL_SOL || '0.5';
 const PAYMENT_WALLET = process.env.PAYMENT_WALLET || '';
 
+// PAPER TRADING : node sniper.js --paper  (aucun vrai achat)
+const PAPER_MODE = process.argv.includes('--paper') || process.env.PAPER_MODE === 'true';
+
 // COFFRE AUTOMATIQUE
 const COFFRE_TRIGGER_USD = 700;
 const COFFRE_AMOUNT_USD  = 500;
@@ -370,6 +373,7 @@ async function submitViaJito(vtx) {
 }
 
 async function sellToken(mint, slippageBps = 500, sellPct = 100) {
+  if (PAPER_MODE) return 'PAPER';
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
       myWallet.publicKey, { mint: new PublicKey(mint) }
@@ -618,6 +622,28 @@ async function snipe(mint, name, entryMC, strat) {
   positions[strat.id][mint] = { status: 'buying' };
   const st = stats[strat.id];
 
+  // ── MODE PAPER : simulation sans vrai achat ───────────────────────────────
+  if (PAPER_MODE) {
+    const buyTime = Date.now();
+    positions[strat.id][mint] = { status: 'open', buyTime, sig: 'PAPER', name };
+    st.total++;
+    sniped.add(mint);
+    const tpStr = strat.TP_LEVELS.map((tp, idx) => 'TP' + (idx + 1) + ' +' + tp + '%').join(' | ');
+    await broadcastTelegram(
+      '📄 [PAPER] SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
+      + '🪙 ' + name + '\n'
+      + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
+      + '💰 Mise simulee : $' + strat.MISE_USD + '\n'
+      + '📐 ' + tpStr + '\n'
+      + '🛑 SL : -' + strat.SL_PCT + '%\n==================\n'
+      + '📊 https://dexscreener.com/solana/' + mint,
+      true
+    );
+    monitorSnipe(mint, name, entryMC, buyTime, strat);
+    return;
+  }
+
+  // ── MODE REEL ─────────────────────────────────────────────────────────────
   for (let i = 1; i <= 3; i++) {
     try {
       const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + strat.MISE_LAMPORTS + '&slippageBps=2000');
@@ -746,16 +772,17 @@ async function scanPumpFun(strat) {
 
 // ─── DEMARRAGE ────────────────────────────────────────────────────────────────
 async function startSniper() {
-  console.log('[SNIPER] v14 — 3 strategies simultanees : LOW / MEDIUM / HIGH');
+  const modeLabel = PAPER_MODE ? 'PAPER TRADING (simulation)' : 'REEL';
+  console.log('[SNIPER] v14 — 3 strategies — mode : ' + modeLabel);
   const lines = STRATEGIES.map(s =>
     s.emoji + ' ' + s.name + ' — $' + s.MISE_USD + '/mise | $' + s.MIN_MC.toLocaleString() + '-$' + s.MAX_MC.toLocaleString() + ' | TP +' + s.TP_LEVELS.join('/+') + '% | SL -' + s.SL_PCT + '% | ≥' + s.MIN_HOLDERS + ' holders'
   ).join('\n');
   await sendTelegram(
-    '🎯 SNIPER v14 — 3 STRATEGIES\n==================\n'
+    (PAPER_MODE ? '📄 PAPER TRADING — SIMULATION\n' : '🎯 SNIPER v14 — 3 STRATEGIES\n')
+    + '==================\n'
     + lines + '\n==================\n'
-    + '💀 Rug detecte en 1s | ⏰ Timeout auto\n'
-    + '📉 Dump -30% : vente immediate\n'
-    + '⚡ Jito bundles actifs\n==================\n'
+    + (PAPER_MODE ? '✅ Aucun vrai achat — stats 100% reelles\n' : '💀 Rug detecte en 1s | ⏰ Timeout auto\n📉 Dump -30% : vente immediate\n⚡ Jito bundles actifs\n')
+    + '==================\n'
     + '/bilan /positions /aide'
   );
 
