@@ -441,10 +441,10 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
       const coin = await getPumpCoin(mint);
       const mc = coin ? Math.round(coin.usd_market_cap || 0) : 0;
 
-      // Rug : MC = 0 deux fois de suite → vente urgence
+      // Rug : MC = 0 une seule fois → vente urgence immediate
       if (!mc) {
         consecutiveZeros++;
-        if (consecutiveZeros >= 2) {
+        if (consecutiveZeros >= 1) {
           clearInterval(interval);
           delete positions[mint];
           stats.losses++;
@@ -566,10 +566,37 @@ async function monitorSnipe(mint, name, entryMC, buyTime) {
   }, MONITOR_INTERVAL);
 }
 
+async function checkLiquidite(mint) {
+  try {
+    // Test achat 10% de la mise pour verifier la liquidite
+    const testLamports = Math.round(MISE_LAMPORTS * 0.1);
+    const buyQr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + testLamports + '&slippageBps=5000');
+    const buyQ = await buyQr.json();
+    if (!buyQ.outAmount) return false;
+    // Test revente immediate pour mesurer la liquidite reelle
+    const sellQr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + mint + '&outputMint=' + SOL + '&amount=' + buyQ.outAmount + '&slippageBps=5000');
+    const sellQ = await sellQr.json();
+    if (!sellQ.outAmount) return false;
+    // Aller-retour : si on recupere moins de 55% c est illiquide → probable rug
+    const ratio = sellQ.outAmount / testLamports;
+    console.log('[LIQ] ' + mint.slice(0, 8) + ' ratio aller-retour : ' + Math.round(ratio * 100) + '%');
+    return ratio >= 0.55;
+  } catch(e) { return true; }
+}
+
 async function snipe(mint, name, entryMC) {
   if (positions[mint]) return;
   if (Object.keys(positions).length >= MAX_OPEN) return;
   positions[mint] = { status: 'buying' };
+
+  // Verification liquidite avant achat : evite les rugs illiquides
+  const liquide = await checkLiquidite(mint);
+  if (!liquide) {
+    delete positions[mint];
+    stats.skipped++;
+    console.log('[SKIP] ' + name + ' — liquidite insuffisante (probable rug)');
+    return;
+  }
 
   for (let i = 1; i <= 3; i++) {
     try {
@@ -669,6 +696,7 @@ async function scanPumpFun() {
       if (ageSec > MAX_AGE_SEC) { tooOld++; continue; }
       if (coin.complete) continue;
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++; continue; }
+      if ((coin.reply_count || 0) < 2) { stats.skipped++; continue; } // au moins 2 commentaires = communaute reelle
 
       // Token en approche : surveiller depuis $5k
       if (mc >= WATCH_MIN_MC && mc < MIN_MC) {
