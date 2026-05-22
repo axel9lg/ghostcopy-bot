@@ -65,9 +65,9 @@ const STRATEGIES = [
     MISE_LAMPORTS: 588235000,   MISE_USD: 100,
     TP_LEVELS: [20, 40, 60, 100], SL_PCT: 10,
     MIN_MC: 4000, MAX_MC: 8000, WATCH_MIN_MC: 3000,
-    MIN_HOLDERS: 10, MAX_OPEN: 2,
+    MIN_HOLDERS: 5, MAX_OPEN: 2,
     MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 1,
+    MIN_REPLY: 0,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
   {
@@ -75,9 +75,9 @@ const STRATEGIES = [
     MISE_LAMPORTS: 588235000,   MISE_USD: 100,
     TP_LEVELS: [20, 40, 60, 100], SL_PCT: 10,
     MIN_MC: 7000, MAX_MC: 12000, WATCH_MIN_MC: 5000,
-    MIN_HOLDERS: 20, MAX_OPEN: 2,
+    MIN_HOLDERS: 10, MAX_OPEN: 2,
     MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
+    MIN_REPLY: 1,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
 ];
@@ -1114,25 +1114,23 @@ async function scanPumpFun(strat) {
       if (ageSec > MAX_AGE_SEC)                                  { tooOld++;   continue; }
       if (coin.complete)                                         continue;
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++;  continue; }
-      if (coin.holder_count > 0 && coin.holder_count < strat.MIN_HOLDERS) { st.skipped++; continue; }
 
-      // Blacklists anti-rug rapides (verification instantanee)
-      if (rugNames.has(name.toLowerCase()))                      { st.skipped++; continue; }
-      if (rugDevs.has(coin.creator))                             { st.skipped++; continue; }
-      if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase())) { st.skipped++; continue; }
-
-      // Filtres anti-rug par strategie
-      if (strat.MIN_REPLY && (coin.reply_count || 0) < strat.MIN_REPLY)    { st.skipped++; continue; }
-      if (strat.REQUIRE_SOCIAL && !coin.twitter && !coin.website)           { st.skipped++; continue; }
-
+      // MC check EN PREMIER — evite de filtrer des tokens hors zone inutilement
       if (mc >= strat.WATCH_MIN_MC && mc < strat.MIN_MC) {
         watchlist[strat.id][coin.mint] = { name, addedAt: Date.now() };
-        console.log('[WATCH/' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString());
         continue;
       }
-
       if (mc < strat.MIN_MC)  { mcLow++;  continue; }
       if (mc > strat.MAX_MC)  { mcHigh++; continue; }
+
+      // Qualite (appliquee uniquement aux tokens dans la zone de prix)
+      if (strat.MIN_HOLDERS > 0 && coin.holder_count > 0 && coin.holder_count < strat.MIN_HOLDERS) { st.skipped++; continue; }
+      if (strat.MIN_REPLY   > 0 && (coin.reply_count || 0) < strat.MIN_REPLY)                      { st.skipped++; continue; }
+
+      // Blacklists anti-rug rapides
+      if (rugNames.has(name.toLowerCase()))                                                         { st.skipped++; continue; }
+      if (rugDevs.has(coin.creator))                                                                { st.skipped++; continue; }
+      if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase()))                      { st.skipped++; continue; }
 
       candidates++;
       console.log('[' + strat.id.toUpperCase() + '] CANDIDAT ' + name + ' | $' + mc.toLocaleString() + ' | age ' + Math.round(ageSec) + 's');
