@@ -61,33 +61,31 @@ const MAX_LAST_TRADE_SEC = 120;
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
-    // Chasseur precoce : entre tot, filtres legers, TP rapide
     id: 'low',    emoji: '🟢', name: 'LOW',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [30, 70],        SL_PCT: 8,
-    MIN_MC: 5000,  MAX_MC: 12000, WATCH_MIN_MC: 4000,
-    MIN_HOLDERS: 10, MAX_OPEN: 2,
-    MAX_HOLD_MS: 6 * 60 * 1000, SCAN_INTERVAL: 4000,
+    MISE_LAMPORTS: 0, MISE_USD: 0, // dynamique via capital
+    TP_LEVELS: [25, 60],        SL_PCT: 8,
+    MIN_MC: 8000,  MAX_MC: 25000, WATCH_MIN_MC: 6000,
+    MIN_HOLDERS: 20, MAX_OPEN: 2,
+    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
+    MIN_REPLY: 1,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
   },
   {
-    // Equilibre : zone mid, filtres moyens, multi-TP
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [20, 50, 100],   SL_PCT: 10,
-    MIN_MC: 10000, MAX_MC: 30000, WATCH_MIN_MC: 8000,
-    MIN_HOLDERS: 25, MAX_OPEN: 2,
+    MISE_LAMPORTS: 0, MISE_USD: 0,
+    TP_LEVELS: [20, 50],        SL_PCT: 10,
+    MIN_MC: 15000, MAX_MC: 40000, WATCH_MIN_MC: 12000,
+    MIN_HOLDERS: 30, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
-    MIN_REPLY: 1, REQUIRE_SOCIAL: true,
+    MIN_REPLY: 1,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
   {
-    // Qualite : entre tard, filtres stricts, trailing long
     id: 'high',   emoji: '🔴', name: 'HIGH',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [15, 35, 70],    SL_PCT: 10,
-    MIN_MC: 20000, MAX_MC: 55000, WATCH_MIN_MC: 16000,
-    MIN_HOLDERS: 50, MAX_OPEN: 2,
+    MISE_LAMPORTS: 0, MISE_USD: 0,
+    TP_LEVELS: [15, 35],        SL_PCT: 10,
+    MIN_MC: 30000, MAX_MC: 65000, WATCH_MIN_MC: 25000,
+    MIN_HOLDERS: 40, MAX_OPEN: 2,
     MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 6000,
     MIN_REPLY: 2, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 15, TRAIL_PCT: 10,
@@ -606,7 +604,7 @@ async function sendSniperReport() {
     const s = stats[strat.id];
     const wr  = s.total > 0 ? Math.round((s.wins / s.total) * 100) : 0;
     const net = s.totalGainUSD - s.totalLossUSD;
-    msg += strat.emoji + ' ' + strat.name + ' — $' + strat.MISE_USD + '/mise\n';
+    msg += strat.emoji + ' ' + strat.name + ' — $' + Math.round(capital * RISK_PCT) + '/mise (capital $' + capital.toFixed(0) + ')\n';
     msg += '  Trades : ' + s.total + ' | Wins : ' + s.wins + ' | Losses : ' + s.losses + ' | WR : ' + wr + '%\n';
     msg += '  TP : +' + strat.TP_LEVELS.join('/+') + '% | SL : -' + strat.SL_PCT + '%\n';
     msg += '  NET : ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0);
