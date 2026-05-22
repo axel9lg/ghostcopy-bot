@@ -34,6 +34,7 @@ let dailyLossDate = new Date().toDateString();
 let tradingPaused = false;
 
 // CONSTANTES GLOBALES
+const SOL_PRICE        = parseFloat(process.env.SOL_PRICE || '170');
 const JITO_FEE         = 500000;
 const JITO_TIP         = 1000000;
 const MONITOR_INTERVAL = 1000;
