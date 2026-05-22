@@ -46,54 +46,33 @@ const MAX_LAST_TRADE_SEC = 120;
 const STRATEGIES = [
   {
     id: 'low',    emoji: '🟢', name: 'LOW',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [20, 50],        SL_PCT: 8,
+    MISE_LAMPORTS: 588235000,   MISE_USD: 100,
+    TP_LEVELS: [25, 60],        SL_PCT: 8,
     MIN_MC: 15000, MAX_MC: 40000, WATCH_MIN_MC: 12000,
     MIN_HOLDERS: 40, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 7000,
-    TRAIL_ACTIVATION_PCT: 15, TRAIL_PCT: 10,
+    MIN_REPLY: 1,
+    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
   },
   {
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [20, 50, 100],   SL_PCT: 10,
-    MIN_MC: 12000, MAX_MC: 60000, WATCH_MIN_MC: 9000,
+    MISE_LAMPORTS: 588235000,   MISE_USD: 100,
+    TP_LEVELS: [20, 50],        SL_PCT: 10,
+    MIN_MC: 12000, MAX_MC: 55000, WATCH_MIN_MC: 9000,
     MIN_HOLDERS: 25, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
+    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
   {
     id: 'high',   emoji: '🔴', name: 'HIGH',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [30, 70, 150],   SL_PCT: 10,
+    MISE_LAMPORTS: 588235000,   MISE_USD: 100,
+    TP_LEVELS: [30, 80],        SL_PCT: 10,
     MIN_MC: 10000, MAX_MC: 25000, WATCH_MIN_MC: 8000,
     MIN_HOLDERS: 30, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 1, REQUIRE_SOCIAL: true,
+    MIN_REPLY: 3, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 25, TRAIL_PCT: 12,
-  },
-  {
-    id: 'moon',   emoji: '🌙', name: 'MOON',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [],              SL_PCT: 12,
-    TP_MC: 25000,               // vente totale a $25k MC
-    TRAIL_LOCK_MC: 20000,       // si MC > $20k → SL verrouille a $20k
-    MIN_MC: 3000, MAX_MC: 6000, WATCH_MIN_MC: 2500,
-    MIN_HOLDERS: 15, MAX_OPEN: 2,
-    MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
-    TRAIL_ACTIVATION_PCT: 50, TRAIL_PCT: 15,
-  },
-  {
-    id: 'dca',    emoji: '🔵', name: 'DCA',
-    mode: 'dca',
-    DCA_STEP_USD: 1000, DCA_MAX_ENTRIES: 5, DCA_SELL_DROP: 5,
-    MISE_LAMPORTS: 0,   MISE_USD: 0,
-    TP_LEVELS: [],      SL_PCT: 10,
-    MIN_MC: 12000, MAX_MC: 35000, WATCH_MIN_MC: 9000,
-    MIN_HOLDERS: 30, MAX_OPEN: 1,
-    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 6000,
-    MIN_REPLY: 1, REQUIRE_SOCIAL: true,
   },
 ];
 
@@ -122,8 +101,8 @@ function saveSubscribers() {
 }
 
 // ─── ETAT PAR STRATEGIE ───────────────────────────────────────────────────────
-const positions = { low: {}, medium: {}, high: {}, moon: {}, dca: {} };
-const watchlist  = { low: {}, medium: {}, high: {}, moon: {}, dca: {} };
+const positions = { low: {}, medium: {}, high: {} };
+const watchlist  = { low: {}, medium: {}, high: {} };
 const stats = {};
 for (const s of STRATEGIES) {
   stats[s.id] = { total: 0, wins: 0, losses: 0, skipped: 0,
