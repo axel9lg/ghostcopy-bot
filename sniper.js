@@ -56,10 +56,10 @@ const STRATEGIES = [
   {
     id: 'high',   emoji: '🔴', name: 'HIGH',
     MISE_LAMPORTS: 1800000000,  MISE_USD: 300,
-    TP_LEVELS: [100],           SL_PCT: 10,
-    MIN_MC: 5000,  MAX_MC: 15000, WATCH_MIN_MC: 3500,
-    MIN_HOLDERS: 15, MAX_OPEN: 2,
-    MAX_HOLD_MS: 5 * 60 * 1000, SCAN_INTERVAL: 4000,
+    TP_LEVELS: [50],            SL_PCT: 10,
+    MIN_MC: 10000, MAX_MC: 25000, WATCH_MIN_MC: 8000,
+    MIN_HOLDERS: 20, MAX_OPEN: 2,
+    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 4000,
   },
 ];
 
