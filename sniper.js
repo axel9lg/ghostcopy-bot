@@ -611,8 +611,12 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
   const prefix = strat.emoji + ' ' + strat.name;
   const MISE   = miseUsd || strat.MISE_USD; // mise reelle utilisee pour ce trade
   let consecutiveZeros = 0;
-  let lastMC = entryMC;
-  let slMC   = Math.round(entryMC * (1 - strat.SL_PCT / 100));
+  let lastMC     = entryMC;
+  let highestMC  = entryMC;
+  let slMC       = Math.round(entryMC * (1 - strat.SL_PCT / 100));
+  let trailActive = false;
+  const TRAIL_ACTIVATION_PCT = strat.TRAIL_ACTIVATION_PCT || 15;
+  const TRAIL_PCT            = strat.TRAIL_PCT            || 12;
   let tpIndex = 0;
   const tpMCs = strat.TP_LEVELS.map(pct => Math.round(entryMC * (1 + pct / 100)));
 
@@ -689,7 +693,24 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
 
       const gainPct  = Math.round((mc / entryMC - 1) * 100);
       const dureeMin = Math.round((Date.now() - buyTime) / 60000);
-      console.log('[' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString() + ' (' + (gainPct >= 0 ? '+' : '') + gainPct + '%) | TP' + (tpIndex + 1) + ' $' + (tpMCs[tpIndex] || '✅').toLocaleString() + ' | ' + dureeMin + 'min');
+
+      // TRAILING STOP LOSS
+      if (mc > highestMC) {
+        highestMC = mc;
+        const gainFromEntry = (highestMC / entryMC - 1) * 100;
+        if (gainFromEntry >= TRAIL_ACTIVATION_PCT) {
+          const newTrailSL = Math.round(highestMC * (1 - TRAIL_PCT / 100));
+          if (newTrailSL > slMC) {
+            if (!trailActive) {
+              trailActive = true;
+              sendTelegram('🔒 TRAILING ACTIF [' + prefix + ']\n🪙 ' + name + '\n📈 Haut : $' + highestMC.toLocaleString() + '\n🛑 SL garanti : $' + newTrailSL.toLocaleString() + ' (' + Math.round((newTrailSL / entryMC - 1) * 100) + '% / entree)');
+            }
+            slMC = newTrailSL;
+          }
+        }
+      }
+
+      console.log('[' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString() + ' (' + (gainPct >= 0 ? '+' : '') + gainPct + '%) | SL $' + slMC.toLocaleString() + (trailActive ? ' 🔒' : '') + ' | ' + dureeMin + 'min');
 
       // MULTI-TP
       while (tpIndex < strat.TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
@@ -718,11 +739,14 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         }
       }
 
-      // SL / BREAK-EVEN
+      // SL / TRAILING SL / BREAK-EVEN
       if (mc <= slMC) {
         clearInterval(interval);
-        if (tpIndex > 0) {
+        const realGainPct = Math.round((mc / entryMC - 1) * 100);
+        const realGainUSD = (realGainPct / 100) * MISE;
+        if (trailActive || tpIndex > 0) {
           st.wins++;
+          st.totalGainUSD += Math.max(0, realGainUSD);
         } else {
           st.losses++;
           st.totalLossUSD += (strat.SL_PCT / 100) * MISE;
@@ -731,10 +755,11 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 800, 100);
         const profitDeja = strat.TP_LEVELS.slice(0, tpIndex).reduce((acc, pct) => acc + (pct / 100) * MISE / strat.TP_LEVELS.length, 0);
+        const label = trailActive ? '🔒 TRAILING SL +' + realGainPct + '%' : tpIndex > 0 ? '✅ BREAK-EVEN' : '🛑 SL -' + strat.SL_PCT + '%';
         await broadcastTelegram(
-          (tpIndex > 0 ? '✅ BREAK-EVEN' : '🛑 SL -' + strat.SL_PCT + '%') + ' [' + prefix + ']\n==================\n🪙 ' + name + '\n'
-          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) : '💸 Perte : -$' + ((strat.SL_PCT / 100) * MISE).toFixed(0)) + '\n'
+          label + ' [' + prefix + ']\n==================\n🪙 ' + name + '\n'
+          + '📊 Entree : $' + entryMC.toLocaleString() + ' | Haut : $' + highestMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
+          + (trailActive || tpIndex > 0 ? '💰 Profit : +$' + (profitDeja + Math.max(0, realGainUSD)).toFixed(0) : '💸 Perte : -$' + ((strat.SL_PCT / 100) * MISE).toFixed(0)) + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (st.total % 10 === 0) sendSniperReport();
