@@ -667,7 +667,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
       // DUMP -30%
       const dropPct = lastMC > 0 ? Math.round((mc / lastMC - 1) * 100) : 0;
       lastMC = mc;
-      if (dropPct <= -30) {
+      if (dropPct <= -15) {
         clearInterval(interval);
         const gainPct  = Math.round((mc / entryMC - 1) * 100);
         const perteUSD = Math.abs((gainPct / 100) * MISE);
