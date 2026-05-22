@@ -49,7 +49,7 @@ const STRATEGIES = [
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
     MISE_LAMPORTS: 1200000000,  MISE_USD: 200,
     TP_LEVELS: [30],            SL_PCT: 10,
-    MIN_MC: 8000,  MAX_MC: 60000, WATCH_MIN_MC: 6000,
+    MIN_MC: 12000, MAX_MC: 60000, WATCH_MIN_MC: 9000,
     MIN_HOLDERS: 25, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
   },
