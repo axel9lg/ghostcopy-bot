@@ -45,33 +45,35 @@ const MAX_LAST_TRADE_SEC = 120;
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
+    // Chasseur precoce : entre tot, filtres legers, TP rapide
     id: 'low',    emoji: '🟢', name: 'LOW',
     MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [25, 60],        SL_PCT: 8,
-    MIN_MC: 4000,  MAX_MC: 10000, WATCH_MIN_MC: 3000,
-    MIN_HOLDERS: 15, MAX_OPEN: 2,
-    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 1,
+    TP_LEVELS: [30, 70],        SL_PCT: 8,
+    MIN_MC: 5000,  MAX_MC: 12000, WATCH_MIN_MC: 4000,
+    MIN_HOLDERS: 10, MAX_OPEN: 2,
+    MAX_HOLD_MS: 6 * 60 * 1000, SCAN_INTERVAL: 4000,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
   },
   {
+    // Equilibre : zone mid, filtres moyens, multi-TP
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
     MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [20, 50],        SL_PCT: 10,
-    MIN_MC: 10000, MAX_MC: 25000, WATCH_MIN_MC: 8000,
+    TP_LEVELS: [20, 50, 100],   SL_PCT: 10,
+    MIN_MC: 10000, MAX_MC: 30000, WATCH_MIN_MC: 8000,
     MIN_HOLDERS: 25, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
-    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
+    MIN_REPLY: 1, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
   {
+    // Qualite : entre tard, filtres stricts, trailing long
     id: 'high',   emoji: '🔴', name: 'HIGH',
     MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [20, 40],        SL_PCT: 10,
-    MIN_MC: 25000, MAX_MC: 60000, WATCH_MIN_MC: 20000,
-    MIN_HOLDERS: 40, MAX_OPEN: 2,
-    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 6000,
-    MIN_REPLY: 3, REQUIRE_SOCIAL: true,
+    TP_LEVELS: [15, 35, 70],    SL_PCT: 10,
+    MIN_MC: 20000, MAX_MC: 55000, WATCH_MIN_MC: 16000,
+    MIN_HOLDERS: 50, MAX_OPEN: 2,
+    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 6000,
+    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 15, TRAIL_PCT: 10,
   },
 ];
