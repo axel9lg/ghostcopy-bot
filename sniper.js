@@ -1120,7 +1120,6 @@ async function scanPumpFun(strat) {
       if (rugNames.has(name.toLowerCase()))                      { st.skipped++; continue; }
       if (rugDevs.has(coin.creator))                             { st.skipped++; continue; }
       if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase())) { st.skipped++; continue; }
-      if (hasRugKeyword(name))                                   { st.skipped++; continue; }
 
       // Filtres anti-rug par strategie
       if (strat.MIN_REPLY && (coin.reply_count || 0) < strat.MIN_REPLY)    { st.skipped++; continue; }
