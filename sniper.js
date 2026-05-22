@@ -219,9 +219,17 @@ async function pollTelegram() {
             await sendTo(chatId, '❌ ESSAI EXPIRE\nContactez ' + ADMIN_USERNAME + ' pour continuer.');
           }
         }
+      } else if (cmd === '/bilan' && !isAdmin) {
+        const sub = subscribers[userId];
+        const hasAccess = sub && (sub.status === 'active' || (sub.status === 'trial' && sub.trialExpiresAt && Date.now() < sub.trialExpiresAt));
+        if (!hasAccess) {
+          await sendTo(chatId, '⛔ Acces requis pour voir le bilan.\n/trial pour 7 jours gratuits.');
+        } else {
+          await sendPublicReport(chatId);
+        }
       } else if (cmd === '/aide') {
-        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai gratuit illimite\n/payer — Acces premium\n/statut — Mon acces\n/aide — Cette liste';
-        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport\n/positions — Positions';
+        let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai gratuit 7 jours\n/payer — Acces premium\n/statut — Mon acces\n/bilan — Performance du bot\n/aide — Cette liste';
+        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport complet\n/positions — Positions';
         await sendTo(chatId, helpMsg);
 
       } else if (isAdmin) {
@@ -488,6 +496,30 @@ async function checkCoffre() {
 }
 
 // ─── RAPPORT ──────────────────────────────────────────────────────────────────
+async function sendPublicReport(chatId) {
+  let grandTotal = 0, grandWins = 0, grandGain = 0, grandLoss = 0;
+  for (const s of STRATEGIES) {
+    grandTotal += stats[s.id].total;
+    grandWins  += stats[s.id].wins;
+    grandGain  += stats[s.id].totalGainUSD;
+    grandLoss  += stats[s.id].totalLossUSD;
+  }
+  const globalNet = grandGain - grandLoss;
+  const globalWR  = grandTotal > 0 ? Math.round((grandWins / grandTotal) * 100) : 0;
+  let msg = '📊 PERFORMANCE GHOSTCOPY\n==================\n';
+  for (const strat of STRATEGIES) {
+    const s = stats[strat.id];
+    const wr  = s.total > 0 ? Math.round((s.wins / s.total) * 100) : 0;
+    const net = s.totalGainUSD - s.totalLossUSD;
+    msg += strat.emoji + ' ' + strat.name + ' — ' + s.total + ' trades | ' + wr + '% WR | ' + (net >= 0 ? '+' : '') + '$' + net.toFixed(0) + '\n';
+  }
+  msg += '==================\n';
+  msg += '📈 Total : ' + grandTotal + ' trades | ' + globalWR + '% WR\n';
+  msg += (globalNet >= 0 ? '✅' : '🔴') + ' NET : ' + (globalNet >= 0 ? '+' : '') + '$' + globalNet.toFixed(0) + '\n';
+  msg += '==================\n💎 /payer pour acces illimite';
+  await sendTo(chatId, msg);
+}
+
 async function sendSniperReport() {
   let msg = '📊 BILAN SNIPER\n==================\n';
   let grandTotal = 0, grandWins = 0, grandGain = 0, grandLoss = 0;
