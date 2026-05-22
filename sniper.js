@@ -35,7 +35,7 @@ let tradingPaused = false;
 
 // GESTION DE CAPITAL
 const CAPITAL_FILE    = './capital.json';
-const STARTING_CAPITAL = 200;
+const STARTING_CAPITAL = 900;
 const RISK_PCT        = 0.10; // 10% du capital par trade
 let capital = STARTING_CAPITAL;
 try {
@@ -61,33 +61,42 @@ const MAX_LAST_TRADE_SEC = 120;
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
+    // Entre super tot, sort vite si ca monte
     id: 'low',    emoji: '🟢', name: 'LOW',
-    MISE_LAMPORTS: 0, MISE_USD: 0,
-    TP_LEVELS: [25, 60],        SL_PCT: 8,
-    MIN_MC: 8000,  MAX_MC: 25000, WATCH_MIN_MC: 6000,
-    MIN_HOLDERS: 10, MAX_OPEN: 2,
-    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
-    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
+    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
+    TP_LEVELS: [],              SL_PCT: 10,
+    TP_MC: 10000,               // vente a $10k MC
+    TRAIL_LOCK_MC: 7000,        // SL verrouille a $7k si depasse
+    MIN_MC: 2500, MAX_MC: 4500, WATCH_MIN_MC: 2000,
+    MIN_HOLDERS: 5, MAX_OPEN: 1,
+    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 3000,
+    TRAIL_ACTIVATION_PCT: 30, TRAIL_PCT: 15,
   },
   {
+    // Attend une premiere confirmation, vise plus haut
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
-    MISE_LAMPORTS: 0, MISE_USD: 0,
-    TP_LEVELS: [20, 50],        SL_PCT: 10,
-    MIN_MC: 15000, MAX_MC: 40000, WATCH_MIN_MC: 12000,
-    MIN_HOLDERS: 20, MAX_OPEN: 2,
-    MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 5000,
+    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
+    TP_LEVELS: [],              SL_PCT: 10,
+    TP_MC: 25000,               // vente a $25k MC
+    TRAIL_LOCK_MC: 15000,       // SL verrouille a $15k si depasse
+    MIN_MC: 4000, MAX_MC: 7000, WATCH_MIN_MC: 3000,
+    MIN_HOLDERS: 10, MAX_OPEN: 1,
+    MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
     MIN_REPLY: 1,
-    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
+    TRAIL_ACTIVATION_PCT: 40, TRAIL_PCT: 15,
   },
   {
+    // Confirmation solide, laisse courir jusqu a $50k
     id: 'high',   emoji: '🔴', name: 'HIGH',
-    MISE_LAMPORTS: 0, MISE_USD: 0,
-    TP_LEVELS: [15, 35],        SL_PCT: 10,
-    MIN_MC: 30000, MAX_MC: 65000, WATCH_MIN_MC: 25000,
-    MIN_HOLDERS: 30, MAX_OPEN: 2,
-    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 6000,
-    MIN_REPLY: 1, REQUIRE_SOCIAL: true,
-    TRAIL_ACTIVATION_PCT: 15, TRAIL_PCT: 10,
+    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
+    TP_LEVELS: [],              SL_PCT: 10,
+    TP_MC: 50000,               // vente a $50k MC
+    TRAIL_LOCK_MC: 25000,       // SL verrouille a $25k si depasse
+    MIN_MC: 6000, MAX_MC: 9000, WATCH_MIN_MC: 5000,
+    MIN_HOLDERS: 15, MAX_OPEN: 1,
+    MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 4000,
+    MIN_REPLY: 1,
+    TRAIL_ACTIVATION_PCT: 50, TRAIL_PCT: 15,
   },
 ];
 
