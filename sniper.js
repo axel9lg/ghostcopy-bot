@@ -972,10 +972,10 @@ async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
     sniped.add(mint);
     const tpStr = strat.TP_LEVELS.map((tp, idx) => 'TP' + (idx + 1) + ' +' + tp + '%').join(' | ');
     await broadcastTelegram(
-      '📄 [PAPER] SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
+      '🎯 SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
       + '🪙 ' + name + '\n'
       + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
-      + '💰 Mise simulee : $' + effectiveUsd + '\n'
+      + '💰 Mise : $' + effectiveUsd + '\n'
       + '📐 ' + tpStr + '\n'
       + '🛑 SL : -' + strat.SL_PCT + '%\n==================\n'
       + '📊 https://dexscreener.com/solana/' + mint,
@@ -1146,16 +1146,15 @@ async function scanPumpFun(strat) {
 
 // ─── DEMARRAGE ────────────────────────────────────────────────────────────────
 async function startSniper() {
-  const modeLabel = PAPER_MODE ? 'PAPER TRADING (simulation)' : 'REEL';
-  console.log('[SNIPER] v14 — 3 strategies — mode : ' + modeLabel);
+  console.log('[SNIPER] v1 — 3 strategies');
   const lines = STRATEGIES.map(s =>
     s.emoji + ' ' + s.name + ' — $' + s.MISE_USD + '/mise | $' + s.MIN_MC.toLocaleString() + '-$' + s.MAX_MC.toLocaleString() + ' | TP +' + s.TP_LEVELS.join('/+') + '% | SL -' + s.SL_PCT + '% | ≥' + s.MIN_HOLDERS + ' holders'
   ).join('\n');
   await sendTelegram(
-    (PAPER_MODE ? '📄 PAPER TRADING — SIMULATION\n' : '🎯 SNIPER v14 — 3 STRATEGIES\n')
+    '🎯 SNIPER v1 — 3 STRATEGIES\n'
     + '==================\n'
     + lines + '\n==================\n'
-    + (PAPER_MODE ? '✅ Aucun vrai achat — stats 100% reelles\n' : '💀 Rug detecte en 1s | ⏰ Timeout auto\n📉 Dump -30% : vente immediate\n⚡ Jito bundles actifs\n')
+    + '💀 Rug detecte en 1s | ⏰ Timeout auto\n📉 Dump detecte : vente immediate\n⚡ Jito bundles actifs\n'
     + '==================\n'
     + '/bilan /positions /aide'
   );
