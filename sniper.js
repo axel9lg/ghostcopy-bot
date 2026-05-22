@@ -27,6 +27,12 @@ const COFFRE_AMOUNT_USD  = 500;
 const TREASURY_WALLET    = process.env.TREASURY_WALLET || '';
 let cofrageEnCours = false;
 
+// LIMITE JOURNALIERE
+const MAX_DAILY_LOSS_USD = 500;
+let dailyLossUSD  = 0;
+let dailyLossDate = new Date().toDateString();
+let tradingPaused = false;
+
 // CONSTANTES GLOBALES
 const JITO_FEE         = 500000;
 const JITO_TIP         = 1000000;
@@ -378,6 +384,51 @@ async function getTokenCache() {
   return tokenCache;
 }
 
+// ─── MISE INTELLIGENTE ───────────────────────────────────────────────────────
+function calculateMise(coin, strat) {
+  let score = 0;
+  const holders = coin.holder_count || 0;
+  const replies  = coin.reply_count  || 0;
+  if (holders >= 50) score += 2; else if (holders >= 30) score += 1;
+  if (replies  >= 5) score += 2; else if (replies  >= 2) score += 1;
+  if (coin.twitter && coin.website) score += 2;
+  else if (coin.twitter || coin.website) score += 1;
+  // score 0-6 → multiplicateur de mise
+  const pct = score >= 5 ? 1.0 : score >= 3 ? 0.75 : 0.5;
+  return {
+    lamports: Math.round(strat.MISE_LAMPORTS * pct),
+    usd:      Math.round(strat.MISE_USD      * pct),
+    score,
+    pct: Math.round(pct * 100),
+  };
+}
+
+// ─── LIMITE JOURNALIERE ───────────────────────────────────────────────────────
+function checkDailyReset() {
+  const today = new Date().toDateString();
+  if (today !== dailyLossDate) {
+    dailyLossDate = today;
+    dailyLossUSD  = 0;
+    if (tradingPaused) {
+      tradingPaused = false;
+      sendTelegram('🌅 NOUVEAU JOUR — Trading reprend\n💰 Limite journaliere remise a zero ($' + MAX_DAILY_LOSS_USD + ')');
+    }
+  }
+}
+
+function addDailyLoss(amount) {
+  dailyLossUSD += amount;
+  if (dailyLossUSD >= MAX_DAILY_LOSS_USD && !tradingPaused) {
+    tradingPaused = true;
+    sendTelegram(
+      '🛑 LIMITE JOURNALIERE ATTEINTE\n==================\n'
+      + '💸 Pertes du jour : -$' + dailyLossUSD.toFixed(0) + '\n'
+      + '🔒 Trading pause jusqu\'a demain minuit\n'
+      + '📅 Reprend automatiquement demain'
+    );
+  }
+}
+
 async function getPumpCoin(mint) {
   const urls = [
     'https://frontend-api-v3.pump.fun/coins/' + mint,
@@ -555,9 +606,10 @@ async function sendSniperReport() {
 }
 
 // ─── MONITORING POSITION ──────────────────────────────────────────────────────
-async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
+async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
   const st     = stats[strat.id];
   const prefix = strat.emoji + ' ' + strat.name;
+  const MISE   = miseUsd || strat.MISE_USD; // mise reelle utilisee pour ce trade
   let consecutiveZeros = 0;
   let lastMC = entryMC;
   let slMC   = Math.round(entryMC * (1 - strat.SL_PCT / 100));
@@ -575,12 +627,12 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
         if (consecutiveZeros >= 1) {
           clearInterval(interval);
           delete positions[strat.id][mint];
-          st.losses++; st.totalLossUSD += strat.MISE_USD;
+          st.losses++; st.totalLossUSD += MISE; addDailyLoss(MISE);
           trackRug(mint, name);
           const sig = await sellToken(mint, 3000);
           await broadcastTelegram(
             '💀 RUG [' + prefix + ']\n==================\n🪙 ' + name + '\n'
-            + '📉 Perte totale : -$' + strat.MISE_USD + '\n'
+            + '📉 Perte totale : -$' + MISE + '\n'
             + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
           );
           if (st.total % 10 === 0) sendSniperReport();
@@ -594,10 +646,10 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
       if (Date.now() - buyTime > strat.MAX_HOLD_MS) {
         clearInterval(interval);
         const gainPct = Math.round((mc / entryMC - 1) * 100);
-        const gainUSD = (gainPct / 100) * strat.MISE_USD;
+        const gainUSD = (gainPct / 100) * MISE;
         delete positions[strat.id][mint];
         if (gainUSD >= 0) { st.wins++; st.totalGainUSD += gainUSD; }
-        else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); }
+        else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); addDailyLoss(Math.abs(gainUSD)); }
         const sig = await sellToken(mint, 1000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
         await broadcastTelegram(
@@ -618,8 +670,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
       if (dropPct <= -30) {
         clearInterval(interval);
         const gainPct  = Math.round((mc / entryMC - 1) * 100);
-        const perteUSD = Math.abs((gainPct / 100) * strat.MISE_USD);
-        st.losses++; st.totalLossUSD += perteUSD;
+        const perteUSD = Math.abs((gainPct / 100) * MISE);
+        st.losses++; st.totalLossUSD += perteUSD; addDailyLoss(perteUSD);
         trackRug(mint, name);
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 3000);
@@ -643,7 +695,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
       while (tpIndex < strat.TP_LEVELS.length && mc >= tpMCs[tpIndex]) {
         const level  = strat.TP_LEVELS[tpIndex];
         const isLast = tpIndex === strat.TP_LEVELS.length - 1;
-        const gainUSD = (level / 100) * strat.MISE_USD / strat.TP_LEVELS.length;
+        const gainUSD = (level / 100) * MISE / strat.TP_LEVELS.length;
         st.totalGainUSD += gainUSD;
         if (tpIndex === 0) slMC = entryMC;
         if (level > st.bestGainPct) { st.bestGainPct = level; st.bestToken = name; }
@@ -673,15 +725,16 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
           st.wins++;
         } else {
           st.losses++;
-          st.totalLossUSD += (strat.SL_PCT / 100) * strat.MISE_USD;
+          st.totalLossUSD += (strat.SL_PCT / 100) * MISE;
+          addDailyLoss((strat.SL_PCT / 100) * MISE);
         }
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 800, 100);
-        const profitDeja = strat.TP_LEVELS.slice(0, tpIndex).reduce((acc, pct) => acc + (pct / 100) * strat.MISE_USD / strat.TP_LEVELS.length, 0);
+        const profitDeja = strat.TP_LEVELS.slice(0, tpIndex).reduce((acc, pct) => acc + (pct / 100) * MISE / strat.TP_LEVELS.length, 0);
         await broadcastTelegram(
           (tpIndex > 0 ? '✅ BREAK-EVEN' : '🛑 SL -' + strat.SL_PCT + '%') + ' [' + prefix + ']\n==================\n🪙 ' + name + '\n'
           + '📊 Entree : $' + entryMC.toLocaleString() + ' | Sortie : $' + mc.toLocaleString() + '\n'
-          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) : '💸 Perte : -$' + ((strat.SL_PCT / 100) * strat.MISE_USD).toFixed(0)) + '\n'
+          + (tpIndex > 0 ? '💰 Profit securise : +$' + profitDeja.toFixed(0) : '💸 Perte : -$' + ((strat.SL_PCT / 100) * MISE).toFixed(0)) + '\n'
           + (sig ? '🔗 https://solscan.io/tx/' + sig : '⚠️ Vente manuelle')
         );
         if (st.total % 10 === 0) sendSniperReport();
@@ -692,11 +745,14 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
 }
 
 // ─── ACHAT ────────────────────────────────────────────────────────────────────
-async function snipe(mint, name, entryMC, strat) {
+async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
+  if (tradingPaused) return;
   if (STRATEGIES.some(s => positions[s.id][mint])) return;
   if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) return;
   positions[strat.id][mint] = { status: 'buying' };
   const st = stats[strat.id];
+  const effectiveLamports = miseLamports || strat.MISE_LAMPORTS;
+  const effectiveUsd      = miseUsd      || strat.MISE_USD;
 
   // ── MODE PAPER : simulation sans vrai achat ───────────────────────────────
   if (PAPER_MODE) {
@@ -709,20 +765,20 @@ async function snipe(mint, name, entryMC, strat) {
       '📄 [PAPER] SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
       + '🪙 ' + name + '\n'
       + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
-      + '💰 Mise simulee : $' + strat.MISE_USD + '\n'
+      + '💰 Mise simulee : $' + effectiveUsd + '\n'
       + '📐 ' + tpStr + '\n'
       + '🛑 SL : -' + strat.SL_PCT + '%\n==================\n'
       + '📊 https://dexscreener.com/solana/' + mint,
       true
     );
-    monitorSnipe(mint, name, entryMC, buyTime, strat);
+    monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd);
     return;
   }
 
   // ── MODE REEL ─────────────────────────────────────────────────────────────
   for (let i = 1; i <= 3; i++) {
     try {
-      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + strat.MISE_LAMPORTS + '&slippageBps=2000');
+      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + effectiveLamports + '&slippageBps=2000');
       const q  = await qr.json();
       if (!q.outAmount) {
         if (i === 3) { delete positions[strat.id][mint]; await sendTelegram('❌ ECHEC\n🪙 ' + name + '\nNon swappable'); }
@@ -751,14 +807,14 @@ async function snipe(mint, name, entryMC, strat) {
         '🎯 SNIPE [' + strat.emoji + ' ' + strat.name + ']\n==================\n'
         + '🪙 ' + name + '\n'
         + '📊 Entree : $' + entryMC.toLocaleString() + ' MC\n==================\n'
-        + '💰 Mise : $' + strat.MISE_USD + '\n'
+        + '💰 Mise : $' + effectiveUsd + '\n'
         + '📐 ' + tpStr + '\n'
-        + '🛑 SL : -' + strat.SL_PCT + '% (-$' + (strat.MISE_USD * strat.SL_PCT / 100).toFixed(0) + ') → break-even apres TP1\n==================\n'
+        + '🛑 SL : -' + strat.SL_PCT + '% (-$' + (effectiveUsd * strat.SL_PCT / 100).toFixed(0) + ') → break-even apres TP1\n==================\n'
         + '🔗 https://solscan.io/tx/' + sig + '\n'
         + '📊 https://dexscreener.com/solana/' + mint,
         true
       );
-      monitorSnipe(mint, name, entryMC, buyTime, strat);
+      monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
@@ -784,7 +840,8 @@ async function checkWatchlist(strat) {
         delete watchlist[strat.id][mint];
         if (Object.keys(positions[strat.id]).length < strat.MAX_OPEN) {
           console.log('[ENTRY/' + strat.id.toUpperCase() + '] ' + info.name + ' → ACHAT $' + mc.toLocaleString());
-          await snipe(mint, info.name, mc, strat);
+          const mise = calculateMise(coin, strat);
+          await snipe(mint, info.name, mc, strat, mise.lamports, mise.usd, mise.score);
         }
       }
     } catch(e) {}
@@ -857,7 +914,9 @@ async function scanPumpFun(strat) {
         st.skipped++; continue;
       }
 
-      await snipe(coin.mint, name, mc, strat);
+      const mise = calculateMise(coin, strat);
+      console.log('[MISE/' + strat.id.toUpperCase() + '] ' + name + ' | score ' + mise.score + ' → $' + mise.usd + ' (' + mise.pct + '%)');
+      await snipe(coin.mint, name, mc, strat, mise.lamports, mise.usd, mise.score);
       break;
     }
 
@@ -882,6 +941,8 @@ async function startSniper() {
     + '==================\n'
     + '/bilan /positions /aide'
   );
+
+  setInterval(() => checkDailyReset(), 60 * 1000);
 
   for (const strat of STRATEGIES) {
     setInterval(() => scanPumpFun(strat), strat.SCAN_INTERVAL);
