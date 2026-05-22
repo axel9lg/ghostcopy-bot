@@ -745,7 +745,7 @@ async function scanPumpFun(strat) {
       if (ageSec > MAX_AGE_SEC)                                  { tooOld++;   continue; }
       if (coin.complete)                                         continue;
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++;  continue; }
-      if ((coin.holder_count || 0) < strat.MIN_HOLDERS)          { st.skipped++; continue; }
+      if (coin.holder_count > 0 && coin.holder_count < strat.MIN_HOLDERS) { st.skipped++; continue; }
 
       if (mc >= strat.WATCH_MIN_MC && mc < strat.MIN_MC) {
         watchlist[strat.id][coin.mint] = { name, addedAt: Date.now() };
@@ -764,7 +764,7 @@ async function scanPumpFun(strat) {
       break;
     }
 
-    console.log('[' + strat.id.toUpperCase() + '] ' + total + ' tokens | jeunes:' + tooYoung + ' vieux:' + tooOld + ' MC-:' + mcLow + ' MC+:' + mcHigh + ' inactifs:' + inactive + ' watch:' + Object.keys(watchlist[strat.id]).length + ' → ' + candidates + ' candidat(s)');
+    console.log('[' + strat.id.toUpperCase() + '] ' + total + ' tokens | jeunes:' + tooYoung + ' vieux:' + tooOld + ' MC-:' + mcLow + ' MC+:' + mcHigh + ' inactifs:' + inactive + ' skips:' + st.skipped + ' watch:' + Object.keys(watchlist[strat.id]).length + ' → ' + candidates + ' candidat(s)');
   } catch(e) {
     console.log('[SCAN/' + strat.id.toUpperCase() + '] Erreur : ' + e.message);
   }
