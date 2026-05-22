@@ -58,8 +58,10 @@ const STRATEGIES = [
     MISE_LAMPORTS: 1800000000,  MISE_USD: 300,
     TP_LEVELS: [50],            SL_PCT: 10,
     MIN_MC: 10000, MAX_MC: 25000, WATCH_MIN_MC: 8000,
-    MIN_HOLDERS: 20, MAX_OPEN: 2,
+    MIN_HOLDERS: 30, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 4000,
+    MIN_REPLY: 1,         // au moins 1 commentaire sur pump.fun
+    REQUIRE_SOCIAL: true, // twitter ou website obligatoire
   },
 ];
 
@@ -825,6 +827,10 @@ async function scanPumpFun(strat) {
       if (rugNames.has(name.toLowerCase()))                      { st.skipped++; continue; }
       if (rugDevs.has(coin.creator))                             { st.skipped++; continue; }
       if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase())) { st.skipped++; continue; }
+
+      // Filtres anti-rug par strategie
+      if (strat.MIN_REPLY && (coin.reply_count || 0) < strat.MIN_REPLY)    { st.skipped++; continue; }
+      if (strat.REQUIRE_SOCIAL && !coin.twitter && !coin.website)           { st.skipped++; continue; }
 
       if (mc >= strat.WATCH_MIN_MC && mc < strat.MIN_MC) {
         watchlist[strat.id][coin.mint] = { name, addedAt: Date.now() };
