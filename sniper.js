@@ -33,6 +33,22 @@ let dailyLossUSD  = 0;
 let dailyLossDate = new Date().toDateString();
 let tradingPaused = false;
 
+// GESTION DE CAPITAL
+const CAPITAL_FILE    = './capital.json';
+const STARTING_CAPITAL = 200;
+const RISK_PCT        = 0.10; // 10% du capital par trade
+let capital = STARTING_CAPITAL;
+try {
+  const saved = JSON.parse(fs.readFileSync(CAPITAL_FILE, 'utf8'));
+  capital = saved.capital || STARTING_CAPITAL;
+} catch(e) { capital = STARTING_CAPITAL; }
+
+function updateCapital(amount) {
+  capital = Math.max(0, parseFloat((capital + amount).toFixed(2)));
+  fs.writeFileSync(CAPITAL_FILE, JSON.stringify({ capital, updatedAt: new Date().toISOString() }));
+  console.log('[CAPITAL] ' + (amount >= 0 ? '+' : '') + amount.toFixed(2) + ' → $' + capital.toFixed(2));
+}
+
 // CONSTANTES GLOBALES
 const SOL_PRICE        = parseFloat(process.env.SOL_PRICE || '170');
 const JITO_FEE         = 500000;
@@ -391,7 +407,7 @@ async function getTokenCache() {
   return tokenCache;
 }
 
-// ─── MISE INTELLIGENTE ───────────────────────────────────────────────────────
+// ─── MISE INTELLIGENTE (basee sur capital restant) ────────────────────────────
 function calculateMise(coin, strat) {
   let score = 0;
   const holders = coin.holder_count || 0;
@@ -400,13 +416,15 @@ function calculateMise(coin, strat) {
   if (replies  >= 5) score += 2; else if (replies  >= 2) score += 1;
   if (coin.twitter && coin.website) score += 2;
   else if (coin.twitter || coin.website) score += 1;
-  // score 0-6 → multiplicateur de mise
-  const pct = score >= 5 ? 1.0 : score >= 3 ? 0.75 : 0.5;
+  const qualite = score >= 5 ? 1.0 : score >= 3 ? 0.75 : 0.5;
+  const baseMise = capital * RISK_PCT;
+  const usd      = Math.max(5, Math.round(baseMise * qualite));
+  const lamports = Math.round((usd / SOL_PRICE) * 1e9);
   return {
-    lamports: Math.round(strat.MISE_LAMPORTS * pct),
-    usd:      Math.round(strat.MISE_USD      * pct),
+    lamports,
+    usd,
     score,
-    pct: Math.round(pct * 100),
+    pct: Math.round(qualite * 100),
   };
 }
 
@@ -608,6 +626,9 @@ async function sendSniperReport() {
   msg += '==================\n';
   msg += '📊 TOTAL : ' + grandTotal + ' trades | ' + globalWR + '% WR\n';
   msg += (globalNet >= 0 ? '✅' : '🔴') + ' NET : ' + (globalNet >= 0 ? '+' : '') + '$' + globalNet.toFixed(0) + '\n';
+  msg += '==================\n';
+  msg += '💰 Capital : $' + capital.toFixed(2) + ' / $' + STARTING_CAPITAL + ' depart\n';
+  msg += '📐 Mise actuelle : $' + Math.round(capital * RISK_PCT) + '/trade\n';
   msg += '==================\n' + reco;
   await sendTelegram(msg);
 }
@@ -638,7 +659,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         if (consecutiveZeros >= 1) {
           clearInterval(interval);
           delete positions[strat.id][mint];
-          st.losses++; st.totalLossUSD += MISE; addDailyLoss(MISE);
+          st.losses++; st.totalLossUSD += MISE; addDailyLoss(MISE); updateCapital(-MISE);
           trackRug(mint, name);
           const sig = await sellToken(mint, 3000);
           await broadcastTelegram(
@@ -659,8 +680,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         const gainPct = Math.round((mc / entryMC - 1) * 100);
         const gainUSD = (gainPct / 100) * MISE;
         delete positions[strat.id][mint];
-        if (gainUSD >= 0) { st.wins++; st.totalGainUSD += gainUSD; }
-        else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); addDailyLoss(Math.abs(gainUSD)); }
+        if (gainUSD >= 0) { st.wins++; st.totalGainUSD += gainUSD; updateCapital(gainUSD); }
+        else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); addDailyLoss(Math.abs(gainUSD)); updateCapital(gainUSD); }
         const sig = await sellToken(mint, 1000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
         await broadcastTelegram(
@@ -682,7 +703,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         clearInterval(interval);
         const gainPct  = Math.round((mc / entryMC - 1) * 100);
         const perteUSD = Math.abs((gainPct / 100) * MISE);
-        st.losses++; st.totalLossUSD += perteUSD; addDailyLoss(perteUSD);
+        st.losses++; st.totalLossUSD += perteUSD; addDailyLoss(perteUSD); updateCapital(-perteUSD);
         trackRug(mint, name);
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 3000);
@@ -779,10 +800,13 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         if (trailActive || tpIndex > 0) {
           st.wins++;
           st.totalGainUSD += Math.max(0, realGainUSD);
+          updateCapital(realGainUSD);
         } else {
+          const slLoss = (strat.SL_PCT / 100) * MISE;
           st.losses++;
-          st.totalLossUSD += (strat.SL_PCT / 100) * MISE;
-          addDailyLoss((strat.SL_PCT / 100) * MISE);
+          st.totalLossUSD += slLoss;
+          addDailyLoss(slLoss);
+          updateCapital(-slLoss);
         }
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 800, 100);
