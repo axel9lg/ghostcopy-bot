@@ -61,26 +61,14 @@ const MAX_LAST_TRADE_SEC = 120;
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
-    // Entre super tot, sort vite si ca monte
-    id: 'low',    emoji: '🟢', name: 'LOW',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [],              SL_PCT: 10,
-    TP_MC: 10000,               // vente a $10k MC
-    TRAIL_LOCK_MC: 7000,        // SL verrouille a $7k si depasse
-    MIN_MC: 2500, MAX_MC: 4500, WATCH_MIN_MC: 2000,
-    MIN_HOLDERS: 5, MAX_OPEN: 1,
-    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 3000,
-    TRAIL_ACTIVATION_PCT: 30, TRAIL_PCT: 15,
-  },
-  {
-    // Attend une premiere confirmation, vise plus haut
+    // Premier momentum confirme, vise $25k
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
     MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
     TP_LEVELS: [],              SL_PCT: 10,
-    TP_MC: 25000,               // vente a $25k MC
-    TRAIL_LOCK_MC: 15000,       // SL verrouille a $15k si depasse
-    MIN_MC: 4000, MAX_MC: 7000, WATCH_MIN_MC: 3000,
-    MIN_HOLDERS: 10, MAX_OPEN: 1,
+    TP_MC: 25000,
+    TRAIL_LOCK_MC: 15000,
+    MIN_MC: 4000, MAX_MC: 8000, WATCH_MIN_MC: 3000,
+    MIN_HOLDERS: 10, MAX_OPEN: 2,
     MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
     MIN_REPLY: 1,
     TRAIL_ACTIVATION_PCT: 40, TRAIL_PCT: 15,
@@ -90,12 +78,12 @@ const STRATEGIES = [
     id: 'high',   emoji: '🔴', name: 'HIGH',
     MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
     TP_LEVELS: [],              SL_PCT: 10,
-    TP_MC: 50000,               // vente a $50k MC
-    TRAIL_LOCK_MC: 25000,       // SL verrouille a $25k si depasse
-    MIN_MC: 6000, MAX_MC: 9000, WATCH_MIN_MC: 5000,
-    MIN_HOLDERS: 15, MAX_OPEN: 1,
+    TP_MC: 50000,
+    TRAIL_LOCK_MC: 25000,
+    MIN_MC: 7000, MAX_MC: 12000, WATCH_MIN_MC: 5000,
+    MIN_HOLDERS: 20, MAX_OPEN: 2,
     MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 1,
+    MIN_REPLY: 2, REQUIRE_SOCIAL: true,
     TRAIL_ACTIVATION_PCT: 50, TRAIL_PCT: 15,
   },
 ];
@@ -125,8 +113,8 @@ function saveSubscribers() {
 }
 
 // ─── ETAT PAR STRATEGIE ───────────────────────────────────────────────────────
-const positions = { low: {}, medium: {}, high: {} };
-const watchlist  = { low: {}, medium: {}, high: {} };
+const positions = { medium: {}, high: {} };
+const watchlist  = { medium: {}, high: {} };
 const stats = {};
 for (const s of STRATEGIES) {
   stats[s.id] = { total: 0, wins: 0, losses: 0, skipped: 0,
@@ -135,9 +123,17 @@ for (const s of STRATEGIES) {
 const sniped = new Set(); // partage entre strategies : evite double achat
 
 // ─── ANTI-RUG ─────────────────────────────────────────────────────────────────
-const rugDevs     = new Set(); // wallets dev serial ruggers
-const rugNames    = new Set(); // noms de tokens qui ont rugge
-const rugTwitters = new Set(); // twitters de tokens qui ont rugge
+const rugDevs     = new Set();
+const rugNames    = new Set();
+const rugTwitters = new Set();
+
+// Mots cles associes aux rugs (recherche dans le nom du token)
+const RUG_KEYWORDS = ['elon','trump','doge','shib','inu','safe','moon','1000x','100x','gem','based','chad','pepe','wojak','bonk','floki','baby','mini','meta','ai','gpt','claim','airdrop','presale'];
+
+function hasRugKeyword(name) {
+  const n = name.toLowerCase();
+  return RUG_KEYWORDS.some(k => n.includes(k));
+}
 const tokenMeta   = {};        // { mint: { creator, twitter } } stocke au moment du scan
 const devCache    = {};        // cache des resultats isSerialRugger
 
@@ -1130,6 +1126,7 @@ async function scanPumpFun(strat) {
       if (rugNames.has(name.toLowerCase()))                      { st.skipped++; continue; }
       if (rugDevs.has(coin.creator))                             { st.skipped++; continue; }
       if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase())) { st.skipped++; continue; }
+      if (hasRugKeyword(name))                                   { st.skipped++; continue; }
 
       // Filtres anti-rug par strategie
       if (strat.MIN_REPLY && (coin.reply_count || 0) < strat.MIN_REPLY)    { st.skipped++; continue; }
