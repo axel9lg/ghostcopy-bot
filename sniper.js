@@ -41,7 +41,7 @@ const MIN_AGE_SEC      = 10;
 const MAX_AGE_SEC      = 600;
 const MAX_LAST_TRADE_SEC = 120;
 
-// ─── 3 STRATEGIES ────────────────────────────────────────────────────────────
+// ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
     id: 'low',    emoji: '🟢', name: 'LOW',
@@ -66,8 +66,22 @@ const STRATEGIES = [
     MIN_MC: 10000, MAX_MC: 25000, WATCH_MIN_MC: 8000,
     MIN_HOLDERS: 30, MAX_OPEN: 2,
     MAX_HOLD_MS: 8 * 60 * 1000, SCAN_INTERVAL: 4000,
-    MIN_REPLY: 1,         // au moins 1 commentaire sur pump.fun
-    REQUIRE_SOCIAL: true, // twitter ou website obligatoire
+    MIN_REPLY: 1,
+    REQUIRE_SOCIAL: true,
+  },
+  {
+    id: 'dca',    emoji: '🔵', name: 'DCA',
+    mode: 'dca',
+    DCA_STEP_USD:    1000, // $ par entree
+    DCA_MAX_ENTRIES: 5,    // max 5 entrees = $5,000 total
+    DCA_SELL_DROP:   5,    // declenche vente si -5% depuis le haut
+    MISE_LAMPORTS:   0, MISE_USD: 0,
+    TP_LEVELS: [], SL_PCT: 10,
+    MIN_MC: 12000, MAX_MC: 35000, WATCH_MIN_MC: 9000,
+    MIN_HOLDERS: 30, MAX_OPEN: 1,
+    MAX_HOLD_MS: 10 * 60 * 1000, SCAN_INTERVAL: 6000,
+    MIN_REPLY: 1,
+    REQUIRE_SOCIAL: true,
   },
 ];
 
@@ -96,8 +110,8 @@ function saveSubscribers() {
 }
 
 // ─── ETAT PAR STRATEGIE ───────────────────────────────────────────────────────
-const positions = { low: {}, medium: {}, high: {} };
-const watchlist  = { low: {}, medium: {}, high: {} };
+const positions = { low: {}, medium: {}, high: {}, dca: {} };
+const watchlist  = { low: {}, medium: {}, high: {}, dca: {} };
 const stats = {};
 for (const s of STRATEGIES) {
   stats[s.id] = { total: 0, wins: 0, losses: 0, skipped: 0,
@@ -769,6 +783,161 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
   }, MONITOR_INTERVAL);
 }
 
+// ─── DCA SNIPE ────────────────────────────────────────────────────────────────
+async function dcaSnipe(mint, name, entryMC, strat) {
+  if (STRATEGIES.some(s => positions[s.id][mint])) return;
+  if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) return;
+  positions[strat.id][mint] = { status: 'open', buyTime: Date.now(), sig: 'DCA', name };
+
+  const st           = stats[strat.id];
+  const STEP         = strat.DCA_STEP_USD;
+  const MAX_ENTRIES  = strat.DCA_MAX_ENTRIES;
+  const SELL_DROP    = strat.DCA_SELL_DROP;
+  const SOL_PER_STEP = Math.round((STEP / SOL_PRICE) * 1e9); // lamports par entree
+
+  let entries    = [{ mc: entryMC, usd: STEP }];
+  let highestMC  = entryMC;
+  let lastMC     = entryMC;
+  let selling    = false;
+  let soldCount  = 0;
+  let totalGain  = 0;
+  st.total++;
+  sniped.add(mint);
+
+  await broadcastTelegram(
+    '🔵 [DCA] ENTREE 1/' + MAX_ENTRIES + '\n==================\n'
+    + '🪙 ' + name + '\n'
+    + '📊 MC : $' + entryMC.toLocaleString() + '\n'
+    + '💰 Achat : $' + STEP + ' | Total max : $' + (STEP * MAX_ENTRIES),
+    true
+  );
+
+  if (!PAPER_MODE) {
+    // Premier achat reel
+    try {
+      const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + SOL_PER_STEP + '&slippageBps=2000');
+      const q  = await qr.json();
+      if (q.outAmount) {
+        const sr = await fetch('https://api.jup.ag/swap/v1/swap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quoteResponse: q, userPublicKey: myWallet.publicKey.toString(), wrapAndUnwrapSol: true, prioritizationFeeLamports: JITO_FEE }) });
+        const sd = await sr.json();
+        if (sd.swapTransaction) {
+          const buf = Buffer.from(sd.swapTransaction, 'base64');
+          const vtx = VersionedTransaction.deserialize(buf);
+          vtx.sign([myWallet]);
+          await submitViaJito(vtx);
+        }
+      }
+    } catch(e) { console.log('[DCA] Erreur achat 1 : ' + e.message); }
+  }
+
+  const interval = setInterval(async () => {
+    try {
+      const coin = await getPumpCoin(mint);
+      const mc   = coin ? Math.round(coin.usd_market_cap || 0) : 0;
+
+      // RUG
+      if (!mc) {
+        clearInterval(interval);
+        delete positions[strat.id][mint];
+        const totalInvested = entries.length * STEP;
+        st.losses++; st.totalLossUSD += totalInvested; addDailyLoss(totalInvested);
+        await broadcastTelegram('💀 RUG [DCA 🔵]\n🪙 ' + name + '\n💸 Perte : -$' + totalInvested, true);
+        return;
+      }
+
+      if (mc > highestMC) highestMC = mc;
+
+      // PHASE ACHAT : MC monte → nouvelle entree
+      if (!selling && entries.length < MAX_ENTRIES && mc > lastMC) {
+        entries.push({ mc, usd: STEP });
+        const totalInvested = entries.length * STEP;
+        await broadcastTelegram(
+          '🔵 [DCA] ENTREE ' + entries.length + '/' + MAX_ENTRIES + '\n🪙 ' + name + '\n'
+          + '💰 $' + STEP + ' @ $' + mc.toLocaleString() + ' MC | Total : $' + totalInvested,
+          true
+        );
+        if (!PAPER_MODE) {
+          try {
+            const qr = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + SOL + '&outputMint=' + mint + '&amount=' + SOL_PER_STEP + '&slippageBps=2000');
+            const q  = await qr.json();
+            if (q.outAmount) {
+              const sr = await fetch('https://api.jup.ag/swap/v1/swap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quoteResponse: q, userPublicKey: myWallet.publicKey.toString(), wrapAndUnwrapSol: true, prioritizationFeeLamports: JITO_FEE }) });
+              const sd = await sr.json();
+              if (sd.swapTransaction) {
+                const buf = Buffer.from(sd.swapTransaction, 'base64');
+                const vtx = VersionedTransaction.deserialize(buf);
+                vtx.sign([myWallet]);
+                await submitViaJito(vtx);
+              }
+            }
+          } catch(e) { console.log('[DCA] Erreur achat ' + entries.length + ' : ' + e.message); }
+        }
+      }
+
+      const avgEntry    = entries.reduce((s, e) => s + e.mc, 0) / entries.length;
+      const gainPct     = (mc / avgEntry - 1) * 100;
+      const dropFromHigh = (mc / highestMC - 1) * 100;
+
+      // DECLENCHER VENTE : -5% depuis le haut ET en profit OU max entrees atteint en profit
+      if (!selling && gainPct > 0 && (dropFromHigh <= -SELL_DROP || entries.length >= MAX_ENTRIES)) {
+        selling = true;
+        await broadcastTelegram(
+          '🔄 [DCA] VENTE EN COURS\n🪙 ' + name + '\n'
+          + '📊 Prix moyen : $' + Math.round(avgEntry).toLocaleString() + '\n'
+          + '📈 MC actuel : $' + mc.toLocaleString() + ' (+' + gainPct.toFixed(1) + '%)\n'
+          + '💰 Vente $' + STEP + '/sec...',
+          true
+        );
+      }
+
+      // SL DUR : MC sous premiere entree -10%
+      const hardSL = entries[0].mc * (1 - strat.SL_PCT / 100);
+      if (!selling && mc <= hardSL) {
+        clearInterval(interval);
+        delete positions[strat.id][mint];
+        const totalInvested = entries.length * STEP;
+        const perte = totalInvested * (strat.SL_PCT / 100);
+        st.losses++; st.totalLossUSD += perte; addDailyLoss(perte);
+        if (!PAPER_MODE) await sellToken(mint, 800, 100);
+        await broadcastTelegram(
+          '🛑 [DCA] SL -' + strat.SL_PCT + '%\n🪙 ' + name + '\n'
+          + '📊 ' + entries.length + ' entrees | Total : $' + totalInvested + '\n'
+          + '💸 Perte : -$' + perte.toFixed(0),
+          true
+        );
+        return;
+      }
+
+      // PHASE VENTE : vend une entree par seconde
+      if (selling && soldCount < entries.length) {
+        const entry    = entries[soldCount];
+        const gain     = (mc / entry.mc - 1) * STEP;
+        totalGain     += gain;
+        soldCount++;
+        if (!PAPER_MODE) await sellToken(mint, 500, Math.round(100 / entries.length));
+        if (soldCount === entries.length) {
+          // Tout vendu
+          clearInterval(interval);
+          delete positions[strat.id][mint];
+          const totalInvested = entries.length * STEP;
+          if (totalGain >= 0) { st.wins++; st.totalGainUSD += totalGain; }
+          else                { st.losses++; st.totalLossUSD += Math.abs(totalGain); addDailyLoss(Math.abs(totalGain)); }
+          await broadcastTelegram(
+            (totalGain >= 0 ? '✅' : '❌') + ' [DCA] TERMINE\n==================\n🪙 ' + name + '\n'
+            + '📊 ' + entries.length + ' entrees | $' + totalInvested + ' investi\n'
+            + '💰 Net : ' + (totalGain >= 0 ? '+' : '') + '$' + totalGain.toFixed(0) + '\n'
+            + '📈 ROI : ' + (totalGain / totalInvested * 100).toFixed(1) + '%',
+            true
+          );
+          checkCoffre();
+        }
+      }
+
+      lastMC = mc;
+    } catch(e) {}
+  }, 1000);
+}
+
 // ─── ACHAT ────────────────────────────────────────────────────────────────────
 async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
   if (tradingPaused) return;
@@ -865,8 +1034,12 @@ async function checkWatchlist(strat) {
         delete watchlist[strat.id][mint];
         if (Object.keys(positions[strat.id]).length < strat.MAX_OPEN) {
           console.log('[ENTRY/' + strat.id.toUpperCase() + '] ' + info.name + ' → ACHAT $' + mc.toLocaleString());
-          const mise = calculateMise(coin, strat);
-          await snipe(mint, info.name, mc, strat, mise.lamports, mise.usd, mise.score);
+          if (strat.mode === 'dca') {
+            await dcaSnipe(mint, info.name, mc, strat);
+          } else {
+            const mise = calculateMise(coin, strat);
+            await snipe(mint, info.name, mc, strat, mise.lamports, mise.usd, mise.score);
+          }
         }
       }
     } catch(e) {}
@@ -939,9 +1112,13 @@ async function scanPumpFun(strat) {
         st.skipped++; continue;
       }
 
-      const mise = calculateMise(coin, strat);
-      console.log('[MISE/' + strat.id.toUpperCase() + '] ' + name + ' | score ' + mise.score + ' → $' + mise.usd + ' (' + mise.pct + '%)');
-      await snipe(coin.mint, name, mc, strat, mise.lamports, mise.usd, mise.score);
+      if (strat.mode === 'dca') {
+        await dcaSnipe(coin.mint, name, mc, strat);
+      } else {
+        const mise = calculateMise(coin, strat);
+        console.log('[MISE/' + strat.id.toUpperCase() + '] ' + name + ' | score ' + mise.score + ' → $' + mise.usd + ' (' + mise.pct + '%)');
+        await snipe(coin.mint, name, mc, strat, mise.lamports, mise.usd, mise.score);
+      }
       break;
     }
 
