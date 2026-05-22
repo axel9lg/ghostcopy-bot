@@ -61,30 +61,24 @@ const MAX_LAST_TRADE_SEC = 120;
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
   {
-    // Premier momentum confirme, vise $25k
     id: 'medium', emoji: '🟡', name: 'MEDIUM',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [],              SL_PCT: 10,
-    TP_MC: 25000,
-    TRAIL_LOCK_MC: 15000,
+    MISE_LAMPORTS: 588235000,   MISE_USD: 100,
+    TP_LEVELS: [20, 40, 60, 100], SL_PCT: 10,
     MIN_MC: 4000, MAX_MC: 8000, WATCH_MIN_MC: 3000,
     MIN_HOLDERS: 10, MAX_OPEN: 2,
     MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
     MIN_REPLY: 1,
-    TRAIL_ACTIVATION_PCT: 40, TRAIL_PCT: 15,
+    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
   {
-    // Confirmation solide, laisse courir jusqu a $50k
     id: 'high',   emoji: '🔴', name: 'HIGH',
-    MISE_LAMPORTS: 1764706000,  MISE_USD: 300,
-    TP_LEVELS: [],              SL_PCT: 10,
-    TP_MC: 50000,
-    TRAIL_LOCK_MC: 25000,
+    MISE_LAMPORTS: 588235000,   MISE_USD: 100,
+    TP_LEVELS: [20, 40, 60, 100], SL_PCT: 10,
     MIN_MC: 7000, MAX_MC: 12000, WATCH_MIN_MC: 5000,
     MIN_HOLDERS: 20, MAX_OPEN: 2,
-    MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 4000,
+    MAX_HOLD_MS: 12 * 60 * 1000, SCAN_INTERVAL: 4000,
     MIN_REPLY: 2, REQUIRE_SOCIAL: true,
-    TRAIL_ACTIVATION_PCT: 50, TRAIL_PCT: 15,
+    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 12,
   },
 ];
 
