@@ -97,6 +97,13 @@ for (const s of STRATEGIES) {
 }
 const sniped = new Set(); // partage entre strategies : evite double achat
 
+// ─── ANTI-RUG ─────────────────────────────────────────────────────────────────
+const rugDevs     = new Set(); // wallets dev serial ruggers
+const rugNames    = new Set(); // noms de tokens qui ont rugge
+const rugTwitters = new Set(); // twitters de tokens qui ont rugge
+const tokenMeta   = {};        // { mint: { creator, twitter } } stocke au moment du scan
+const devCache    = {};        // cache des resultats isSerialRugger
+
 // ─── CACHE TOKENS (partage entre strategies) ──────────────────────────────────
 let tokenCache = [];
 let tokenCacheTime = 0;
@@ -317,6 +324,33 @@ async function getPumpTokens() {
   return merged;
 }
 
+// Verifie si un dev a cree 3+ tokens qui ont tous plafonne a < $3k (serial rugger)
+async function isSerialRugger(creator) {
+  if (creator in devCache) return devCache[creator];
+  if (rugDevs.has(creator)) return (devCache[creator] = true);
+  try {
+    const r = await fetch('https://frontend-api-v3.pump.fun/coins/user-created-coins/' + creator + '?offset=0&limit=10&includeNsfw=true', { headers: PUMP_HEADERS });
+    if (!r.ok) return (devCache[creator] = false);
+    const data = await r.json();
+    const coins = Array.isArray(data) ? data : (data.coins || data.data || []);
+    if (coins.length < 3) return (devCache[creator] = false);
+    const allLow = coins.every(c => (c.usd_market_cap || 0) < 3000);
+    if (allLow) rugDevs.add(creator);
+    return (devCache[creator] = allLow);
+  } catch(e) { return (devCache[creator] = false); }
+}
+
+// Enregistre un rug dans les blacklists (nom, twitter, dev)
+function trackRug(mint, name) {
+  rugNames.add(name.toLowerCase());
+  const meta = tokenMeta[mint];
+  if (meta) {
+    if (meta.creator) { rugDevs.add(meta.creator); devCache[meta.creator] = true; }
+    if (meta.twitter) rugTwitters.add(meta.twitter.toLowerCase());
+    delete tokenMeta[mint];
+  }
+}
+
 async function getTokenCache() {
   if (Date.now() - tokenCacheTime < TOKEN_CACHE_TTL) return tokenCache;
   if (tokenCacheFetching) { await new Promise(r => setTimeout(r, 500)); return tokenCache; }
@@ -502,6 +536,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
           clearInterval(interval);
           delete positions[strat.id][mint];
           st.losses++; st.totalLossUSD += strat.MISE_USD;
+          trackRug(mint, name);
           const sig = await sellToken(mint, 3000);
           await broadcastTelegram(
             '💀 RUG [' + prefix + ']\n==================\n🪙 ' + name + '\n'
@@ -545,6 +580,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat) {
         const gainPct  = Math.round((mc / entryMC - 1) * 100);
         const perteUSD = Math.abs((gainPct / 100) * strat.MISE_USD);
         st.losses++; st.totalLossUSD += perteUSD;
+        trackRug(mint, name);
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 3000);
         const dureeMin = Math.round((Date.now() - buyTime) / 60000);
@@ -747,6 +783,11 @@ async function scanPumpFun(strat) {
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++;  continue; }
       if (coin.holder_count > 0 && coin.holder_count < strat.MIN_HOLDERS) { st.skipped++; continue; }
 
+      // Blacklists anti-rug rapides (verification instantanee)
+      if (rugNames.has(name.toLowerCase()))                      { st.skipped++; continue; }
+      if (rugDevs.has(coin.creator))                             { st.skipped++; continue; }
+      if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase())) { st.skipped++; continue; }
+
       if (mc >= strat.WATCH_MIN_MC && mc < strat.MIN_MC) {
         watchlist[strat.id][coin.mint] = { name, addedAt: Date.now() };
         console.log('[WATCH/' + strat.id.toUpperCase() + '] ' + name + ' | $' + mc.toLocaleString());
@@ -760,6 +801,18 @@ async function scanPumpFun(strat) {
       console.log('[' + strat.id.toUpperCase() + '] CANDIDAT ' + name + ' | $' + mc.toLocaleString() + ' | age ' + Math.round(ageSec) + 's');
 
       if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) { st.skipped++; continue; }
+
+      // Stocker les metadata du token pour tracking si rug
+      if (coin.creator || coin.twitter) {
+        tokenMeta[coin.mint] = { creator: coin.creator || null, twitter: coin.twitter || null };
+      }
+
+      // Check serial rugger (appel API uniquement pour les candidats finaux)
+      if (coin.creator && await isSerialRugger(coin.creator)) {
+        console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — dev serial rugger');
+        st.skipped++; continue;
+      }
+
       await snipe(coin.mint, name, mc, strat);
       break;
     }
