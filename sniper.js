@@ -127,18 +127,17 @@ async function broadcastTelegram(msg, countAsSnipe = false) {
   await sendTo(ADMIN_ID, msg);
   for (const [id, sub] of Object.entries(subscribers)) {
     if (sub.status !== 'active' && sub.status !== 'trial') continue;
-    if (sub.status === 'trial' && sub.snipesLeft <= 0) continue;
+    // Verifier expiration 7 jours
+    if (sub.status === 'trial' && sub.trialExpiresAt && Date.now() > sub.trialExpiresAt) {
+      sub.status = 'expired';
+      saveSubscribers();
+      await sendTo(id, '⏰ ESSAI 7 JOURS TERMINE\n==================\nVotre essai gratuit est expire.\nContactez ' + ADMIN_USERNAME + ' pour continuer 💎');
+      continue;
+    }
     await sendTo(id, msg);
     if (countAsSnipe && sub.status === 'trial') {
-      sub.snipesLeft--;
       sub.snipesUsed = (sub.snipesUsed || 0) + 1;
-      if (sub.snipesLeft <= 0) {
-        sub.status = 'expired';
-        saveSubscribers();
-        await sendTo(id, '⏰ ESSAI TERMINE\n==================\nVos snipes gratuits sont epuises.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet 💎');
-      } else {
-        saveSubscribers();
-      }
+      saveSubscribers();
     }
   }
 }
@@ -171,7 +170,7 @@ async function pollTelegram() {
         await sendTo(chatId,
           '👋 Bienvenue sur GhostCopy Sniper!\n==================\n'
           + '🤖 Signaux de snipe Pump.fun en temps reel\n==================\n'
-          + '🆓 /trial — Essai gratuit illimite\n'
+          + '🆓 /trial — Essai gratuit 7 jours\n'
           + '💎 /payer — Acces premium\n==================\n'
           + '/statut — Mon acces\n/aide — Aide'
         );
@@ -188,15 +187,20 @@ async function pollTelegram() {
         );
       } else if (cmd === '/trial' && !isAdmin) {
         const sub = subscribers[userId];
-        if (sub && (sub.status === 'active' || sub.status === 'trial')) {
+        if (sub && sub.status === 'active') {
           await sendTo(chatId, '✅ Vous avez deja un acces actif!\n/statut pour les details.');
+        } else if (sub && sub.status === 'trial' && sub.trialExpiresAt && Date.now() < sub.trialExpiresAt) {
+          const daysLeft = Math.ceil((sub.trialExpiresAt - Date.now()) / (1000 * 60 * 60 * 24));
+          await sendTo(chatId, '✅ Essai en cours — ' + daysLeft + ' jour(s) restant(s).\n/statut pour les details.');
         } else if (sub && sub.status === 'expired') {
-          await sendTo(chatId, '⛔ Essai termine.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet.');
+          await sendTo(chatId, '⛔ Essai 7 jours termine.\nContactez ' + ADMIN_USERNAME + ' pour un acces complet.');
         } else {
-          subscribers[userId] = { username, status: 'active', snipesLeft: 999999, snipesUsed: 0, joinedAt: new Date().toISOString().slice(0, 10) };
+          const trialExpiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+          subscribers[userId] = { username, status: 'trial', snipesLeft: 999999, snipesUsed: 0, trialExpiresAt, joinedAt: new Date().toISOString().slice(0, 10) };
           saveSubscribers();
-          await sendTo(chatId, '🎉 ESSAI ILLIMITE ACTIVE!\n==================\n✅ Acces gratuit illimite\nVous allez recevoir tous les signaux!\n==================\nPour un acces premium → ' + ADMIN_USERNAME);
-          await sendTelegram('🆕 ESSAI\n' + username + ' (ID: ' + userId + ')\na active un essai illimite.');
+          const expireDate = new Date(trialExpiresAt).toLocaleDateString('fr-FR');
+          await sendTo(chatId, '🎉 ESSAI 7 JOURS ACTIVE!\n==================\n✅ Acces gratuit pendant 7 jours\n📅 Expire le : ' + expireDate + '\nVous allez recevoir tous les signaux!\n==================\nPour continuer apres l essai → ' + ADMIN_USERNAME);
+          await sendTelegram('🆕 ESSAI 7J\n' + username + ' (ID: ' + userId + ')\na active un essai 7 jours.');
         }
       } else if (cmd === '/statut') {
         if (isAdmin) {
@@ -206,7 +210,9 @@ async function pollTelegram() {
           if (!sub || sub.status === 'pending' || sub.status === 'inactive') {
             await sendTo(chatId, '⛔ Pas d\'acces.\n/trial pour essai gratuit\n' + ADMIN_USERNAME + ' pour acces complet');
           } else if (sub.status === 'trial') {
-            await sendTo(chatId, '🆓 ESSAI EN COURS\n==================\n⚡ ' + sub.snipesLeft + ' snipes restants\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
+            const daysLeft = sub.trialExpiresAt ? Math.max(0, Math.ceil((sub.trialExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) : '?';
+            const expireDate = sub.trialExpiresAt ? new Date(sub.trialExpiresAt).toLocaleDateString('fr-FR') : '?';
+            await sendTo(chatId, '🆓 ESSAI EN COURS\n==================\n📅 ' + daysLeft + ' jour(s) restant(s) (expire le ' + expireDate + ')\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
           } else if (sub.status === 'active') {
             await sendTo(chatId, '💎 ACCES COMPLET\n==================\n✅ Illimite\n📈 ' + (sub.snipesUsed || 0) + ' signaux recus');
           } else if (sub.status === 'expired') {
