@@ -17,7 +17,7 @@ const SOL = 'So11111111111111111111111111111111111111112';
 const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
 const MISE_USD = 200;
-const TP_PCT = 15;    // +15% = +$30 sur $200
+const TP_PCT = 60;    // +60% = +$120 sur $200 (minimum viable avec rugs a -$200)
 const SL_MC = 2500;   // stop loss si MC tombe a $2,500
 const MIN_LIQUIDITY = 5000;
 const MIN_WALLET_WINRATE = 30;
@@ -372,8 +372,7 @@ async function listenPumpFun() {
   }, 'confirmed');
 }
 
-console.log('Bot PRO demarre');
-TARGETS.forEach(w => { const wallet = w.trim(); if (wallet) handleWallet(wallet); });
-listenPumpFun();
-sendTelegram('🚀 GHOSTCOPY BOT DEMARRE\n==================\nWallets surveilles : ' + TARGETS.length + '\n🔍 Copie des trades en temps reel\n==================\n💰 Mise par trade : $' + MISE_USD + '\n🎯 TP : +' + TP_PCT + '% = +$' + (MISE_USD * TP_PCT / 100).toFixed(0) + ' profit\n🛑 SL : MC < $' + SL_MC.toLocaleString() + '\n==================');
-if (process.env.NODE_ENV !== 'production') require('dotenv').config();
+console.log('Bot PRO en pause — copy trading desactive');
+// TARGETS.forEach(w => { const wallet = w.trim(); if (wallet) handleWallet(wallet); });
+// listenPumpFun();
+// sendTelegram(...);

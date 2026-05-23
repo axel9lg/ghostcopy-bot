@@ -1,0 +1,16 @@
+[
+  {
+    "id": "v1",
+    "savedAt": "2026-05-23",
+    "MIN_MC": 9000,
+    "MAX_MC": 11000,
+    "TP_LEVELS": [20, 50, 100],
+    "SL_PCT": 20,
+    "MISE_USD": 100,
+    "MIN_HOLDERS": 20,
+    "MIN_REPLY": 2,
+    "CONFIRM_SEC": 5,
+    "GRADUATED_ONLY": false,
+    "note": "Config de base — entree $9500 | TP +20/+50/+100% | SL -20%"
+  }
+]

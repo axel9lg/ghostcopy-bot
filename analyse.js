@@ -165,3 +165,40 @@ if (parseFloat(wr) >= 40 && parseFloat(ev) > 0) { console.log('  🏆 Config ren
 if (!hasReco) console.log('  Pas assez de donnees pour des recommandations precises.');
 
 console.log('═══════════════════════════════════════════════════════════════\n');
+
+// ── COMPARAISON DES CONFIGS
+const CONFIGS_FILE = './configs.json';
+let configs = [];
+try { configs = JSON.parse(fs.readFileSync(CONFIGS_FILE, 'utf8')); } catch(e) {}
+
+const configIds = [...new Set(trades.map(t => t.configId || 'inconnu'))];
+if (configIds.length > 0) {
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('COMPARAISON DES CONFIGS');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  const configResults = configIds.map(cid => {
+    const ct   = trades.filter(t => (t.configId || 'inconnu') === cid);
+    const cw   = ct.filter(t => t.gainUSD > 0).length;
+    const cl   = ct.filter(t => t.gainUSD < 0).length;
+    const cNet = ct.reduce((s, t) => s + t.gainUSD, 0);
+    const cWR  = ct.length > 0 ? ((cw / ct.length) * 100).toFixed(1) : '0';
+    const cEV  = ct.length > 0 ? (cNet / ct.length).toFixed(2) : '0';
+    const cfg  = configs.find(c => c.id === cid);
+    return { cid, total: ct.length, wins: cw, losses: cl, net: cNet, wr: cWR, ev: cEV, note: cfg?.note || '' };
+  }).sort((a, b) => parseFloat(b.ev) - parseFloat(a.ev));
+
+  for (const r of configResults) {
+    const medal = r === configResults[0] ? '🥇' : r === configResults[1] ? '🥈' : r === configResults[2] ? '🥉' : '  ';
+    const sign  = parseFloat(r.ev) >= 0 ? '+' : '';
+    console.log(medal + ' ' + r.cid.padEnd(6) + ' | ' + String(r.total).padStart(3) + ' trades | ' + String(r.wr).padStart(5) + '% WR | EV ' + sign + '$' + r.ev + '/t | NET ' + (r.net >= 0 ? '+' : '') + '$' + Math.round(r.net));
+    if (r.note) console.log('       ' + r.note);
+  }
+
+  if (configResults.length > 1) {
+    const best = configResults[0];
+    console.log('\n  🏆 MEILLEURE CONFIG : ' + best.cid + ' — EV ' + (parseFloat(best.ev) >= 0 ? '+' : '') + '$' + best.ev + '/trade');
+    if (best.note) console.log('     ' + best.note);
+  }
+  console.log('\n═══════════════════════════════════════════════════════════════\n');
+}
