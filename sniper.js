@@ -36,7 +36,7 @@ const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
     configId: 'v1', // incremente a chaque changement de reglages : v1, v2, v3...
-    MISE_LAMPORTS: 588235000, MISE_USD: 100,
+    MISE_LAMPORTS: 1764706000, MISE_USD: 300,
     TP_LEVELS: [20, 50, 100],
     SL_PCT: 20,
     SL_MC: 0,
