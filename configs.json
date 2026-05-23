@@ -6,11 +6,11 @@
     "MAX_MC": 11000,
     "TP_LEVELS": [20, 50, 100],
     "SL_PCT": 20,
-    "MISE_USD": 100,
+    "MISE_USD": 300,
     "MIN_HOLDERS": 20,
     "MIN_REPLY": 2,
     "CONFIRM_SEC": 5,
     "GRADUATED_ONLY": false,
-    "note": "Config de base — entree $9500 | TP +20/+50/+100% | SL -20%"
+    "note": "Config de base — entree $9500 | TP +20/+50/+100% | SL -20% | CONFIRME RENTABLE : 89 trades, 42% WR, +$489"
   }
 ]
