@@ -66,6 +66,16 @@ const ADMIN_ID       = String(process.env.TELEGRAM_CHAT_ID);
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '@admin';
 const SUBSCRIBERS_FILE = './subscribers.json';
 
+// ─── HISTORIQUE DES TRADES ────────────────────────────────────────────────────
+const TRADES_FILE = './trades.json';
+let tradeHistory = [];
+try { tradeHistory = JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8')); } catch(e) { tradeHistory = []; }
+
+function logTrade(data) {
+  tradeHistory.push(data);
+  try { fs.writeFileSync(TRADES_FILE, JSON.stringify(tradeHistory, null, 2)); } catch(e) {}
+}
+
 let subscribers = {};
 try { subscribers = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8')); } catch(e) { subscribers = {}; }
 function saveSubscribers() {
@@ -223,12 +233,14 @@ async function pollTelegram() {
         }
       } else if (cmd === '/aide') {
         let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai gratuit 7 jours\n/payer — Acces premium\n/statut — Mon acces\n/bilan — Performance du bot\n/aide — Cette liste';
-        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces\n/bilan — Rapport complet\n/positions — Positions';
+        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/bilan — Rapport complet\n/analyse — Analyse des performances\n/positions — Positions ouvertes\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces';
         await sendTo(chatId, helpMsg);
 
       } else if (isAdmin) {
         if (cmd === '/bilan') {
           await sendSniperReport();
+        } else if (cmd === '/analyse') {
+          await sendAnalyse();
         } else if (cmd === '/positions') {
           let posMsg = '📊 POSITIONS OUVERTES\n==================\n';
           let totalOpen = 0;
@@ -444,6 +456,85 @@ async function sellToken(mint, slippageBps = 500, sellPct = 100) {
   } catch(e) { console.log('Erreur sell : ' + e.message); return null; }
 }
 
+// ─── ANALYSE ─────────────────────────────────────────────────────────────────
+async function sendAnalyse() {
+  if (tradeHistory.length < 5) {
+    await sendTelegram('📊 Pas encore assez de trades (' + tradeHistory.length + '/5 minimum).');
+    return;
+  }
+  const trades = tradeHistory;
+  const total  = trades.length;
+  const wins   = trades.filter(t => t.gainUSD > 0).length;
+  const wr     = Math.round((wins / total) * 100);
+  const netUSD = trades.reduce((s, t) => s + t.gainUSD, 0);
+  const ev     = (netUSD / total).toFixed(1);
+
+  // Repartition des sorties
+  const byOutcome = {};
+  for (const t of trades) { byOutcome[t.outcome] = (byOutcome[t.outcome] || 0) + 1; }
+  const outcomeStr = Object.entries(byOutcome).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => k + ':' + v).join(' | ');
+
+  // Analyse par heure (top 3 meilleures heures)
+  const byHour = {};
+  for (const t of trades) {
+    if (!byHour[t.hour]) byHour[t.hour] = { total: 0, net: 0 };
+    byHour[t.hour].total++;
+    byHour[t.hour].net += t.gainUSD;
+  }
+  const topHours = Object.entries(byHour)
+    .filter(([, v]) => v.total >= 2)
+    .sort((a, b) => (b[1].net / b[1].total) - (a[1].net / a[1].total))
+    .slice(0, 3)
+    .map(([h, v]) => h + 'h(' + (v.net >= 0 ? '+' : '') + Math.round(v.net / v.total) + '$/t)')
+    .join(' ');
+
+  // Analyse par holders
+  const byHolders = { low: { total: 0, net: 0 }, mid: { total: 0, net: 0 }, high: { total: 0, net: 0 } };
+  for (const t of trades) {
+    const k = t.holders < 15 ? 'low' : t.holders < 30 ? 'mid' : 'high';
+    byHolders[k].total++;
+    byHolders[k].net += t.gainUSD;
+  }
+  const holdersStr = Object.entries(byHolders)
+    .filter(([, v]) => v.total > 0)
+    .map(([k, v]) => {
+      const label = k === 'low' ? '<15h' : k === 'mid' ? '15-30h' : '>30h';
+      return label + ':' + (v.net >= 0 ? '+' : '') + Math.round(v.net / v.total) + '$/t';
+    }).join(' | ');
+
+  // Duree moyenne win vs loss
+  const winsData  = trades.filter(t => t.gainUSD > 0);
+  const lossData  = trades.filter(t => t.gainUSD < 0);
+  const avgWinDur = winsData.length > 0 ? Math.round(winsData.reduce((s, t) => s + t.durationMin, 0) / winsData.length) : 0;
+  const avgLosDur = lossData.length > 0 ? Math.round(lossData.reduce((s, t) => s + t.durationMin, 0) / lossData.length) : 0;
+  const avgWin    = winsData.length > 0 ? Math.round(winsData.reduce((s, t) => s + t.gainUSD, 0) / winsData.length) : 0;
+  const avgLoss   = lossData.length > 0 ? Math.round(Math.abs(lossData.reduce((s, t) => s + t.gainUSD, 0)) / lossData.length) : 0;
+
+  let msg = '📊 ANALYSE — ' + total + ' TRADES\n==================\n';
+  msg += '📈 ' + wins + ' wins / ' + (total - wins) + ' losses | ' + wr + '% WR\n';
+  msg += (netUSD >= 0 ? '✅' : '📉') + ' NET : ' + (netUSD >= 0 ? '+' : '') + '$' + Math.round(netUSD) + ' | EV : ' + (parseFloat(ev) >= 0 ? '+' : '') + ev + '$/trade\n';
+  msg += '==================\n';
+  msg += '🎯 Sorties : ' + outcomeStr + '\n';
+  msg += '⏱ Win avg : ' + avgWinDur + 'min (+$' + avgWin + ') | Loss avg : ' + avgLosDur + 'min (-$' + avgLoss + ')\n';
+  msg += '==================\n';
+  if (topHours) msg += '🕐 Meilleures heures : ' + topHours + '\n';
+  if (holdersStr) msg += '👥 Holders : ' + holdersStr + '\n';
+  msg += '==================\n';
+
+  // Recommandations automatiques
+  const rugs  = trades.filter(t => t.outcome === 'rug').length;
+  const dumps = trades.filter(t => t.outcome === 'dump').length;
+  msg += '💡 RECOMMANDATIONS\n';
+  if (rugs / total > 0.3)  msg += '• ' + Math.round(rugs / total * 100) + '% de rugs — augmenter MIN_HOLDERS\n';
+  if (dumps / total > 0.2) msg += '• ' + Math.round(dumps / total * 100) + '% de dumps — verifier les entrees\n';
+  if (wr < 35) msg += '• WR < 35% — filtres trop laxistes, serrer les conditions\n';
+  if (avgWin < avgLoss) msg += '• Gain moyen (+$' + avgWin + ') < Perte moyenne (-$' + avgLoss + ') — TP trop tot ou SL trop serré\n';
+  if (wr >= 40 && parseFloat(ev) > 0) msg += '• Config rentable ! Continuer ainsi\n';
+
+  await sendTelegram(msg);
+}
+
 // ─── RAPPORT ──────────────────────────────────────────────────────────────────
 async function sendPublicReport(chatId) {
   let grandTotal = 0, grandWins = 0, grandGain = 0, grandLoss = 0;
@@ -497,10 +588,11 @@ async function sendSniperReport() {
 }
 
 // ─── MONITORING POSITION ──────────────────────────────────────────────────────
-async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
+async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd, meta = {}) {
   const st     = stats[strat.id];
   const prefix = strat.emoji + ' ' + strat.name;
-  const MISE   = miseUsd || strat.MISE_USD; // mise reelle utilisee pour ce trade
+  const MISE   = miseUsd || strat.MISE_USD;
+  const entryHour = new Date().getHours();
   let consecutiveZeros = 0;
   let lastMC     = entryMC;
   let highestMC  = entryMC;
@@ -523,6 +615,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
           clearInterval(interval);
           delete positions[strat.id][mint];
           st.losses++; st.totalLossUSD += MISE;
+          logTrade({ date: new Date().toISOString(), name, mint, strategy: strat.id, entryMC, exitMC: 0, durationMin: Math.round((Date.now() - buyTime) / 60000), outcome: 'rug', tpsHit: tpIndex, gainUSD: -MISE, gainPct: -100, mise: MISE, holders: meta.holders || 0, replies: meta.replies || 0, ageSec: meta.ageSec || 0, hour: entryHour });
           trackRug(mint, name);
           await sellToken(mint, 3000);
           await broadcastTelegram(
@@ -547,6 +640,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         delete positions[strat.id][mint];
         if (gainUSD >= 0) { st.wins++; st.totalGainUSD += gainUSD; }
         else              { st.losses++; st.totalLossUSD += Math.abs(gainUSD); }
+        logTrade({ date: new Date().toISOString(), name, mint, strategy: strat.id, entryMC, exitMC: mc, durationMin: dureeMin, outcome: 'timeout', tpsHit: tpIndex, gainUSD: Math.round(gainUSD), gainPct, mise: MISE, holders: meta.holders || 0, replies: meta.replies || 0, ageSec: meta.ageSec || 0, hour: entryHour });
         const sig = await sellToken(mint, 1000);
         await broadcastTelegram(
           '⏰ TIMEOUT — ' + prefix + '\n==================\n'
@@ -567,6 +661,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         clearInterval(interval);
         const perteUSD = Math.abs((gainPct / 100) * MISE);
         st.losses++; st.totalLossUSD += perteUSD;
+        logTrade({ date: new Date().toISOString(), name, mint, strategy: strat.id, entryMC, exitMC: mc, durationMin: dureeMin, outcome: 'dump', tpsHit: tpIndex, gainUSD: -Math.round(perteUSD), gainPct, mise: MISE, holders: meta.holders || 0, replies: meta.replies || 0, ageSec: meta.ageSec || 0, hour: entryHour });
         trackRug(mint, name);
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 3000);
@@ -627,6 +722,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
         if (isLast) {
           clearInterval(interval);
           st.wins++;
+          const totalPnl = strat.TP_LEVELS.reduce((acc, pct) => acc + (pct / 100) * MISE / strat.TP_LEVELS.length, 0);
+          logTrade({ date: new Date().toISOString(), name, mint, strategy: strat.id, entryMC, exitMC: mc, durationMin: dureeMin, outcome: 'tp_full', tpsHit: strat.TP_LEVELS.length, gainUSD: Math.round(totalPnl), gainPct: strat.TP_LEVELS[strat.TP_LEVELS.length - 1], mise: MISE, holders: meta.holders || 0, replies: meta.replies || 0, ageSec: meta.ageSec || 0, hour: entryHour });
           delete positions[strat.id][mint];
           if (st.total % 5 === 0) sendSniperReport();
           return;
@@ -648,6 +745,8 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
           st.losses++;
           st.totalLossUSD += slLoss;
         }
+        const outcome = trailActive ? 'trailing_sl' : tpIndex > 0 ? 'breakeven' : 'sl';
+        logTrade({ date: new Date().toISOString(), name, mint, strategy: strat.id, entryMC, exitMC: mc, durationMin: dureeMin, outcome, tpsHit: tpIndex, gainUSD: Math.round(trailActive || tpIndex > 0 ? totalProfit : -Math.abs(realGainUSD)), gainPct: realGainPct, mise: MISE, holders: meta.holders || 0, replies: meta.replies || 0, ageSec: meta.ageSec || 0, hour: entryHour });
         delete positions[strat.id][mint];
         const sig = await sellToken(mint, 800, 100);
         const label = trailActive ? '🔒 TRAILING SL +' + realGainPct + '%'
@@ -670,7 +769,7 @@ async function monitorSnipe(mint, name, entryMC, buyTime, strat, miseUsd) {
 
 
 // ─── ACHAT ────────────────────────────────────────────────────────────────────
-async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
+async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score, meta = {}) {
   if (STRATEGIES.some(s => positions[s.id][mint])) return;
   if (Object.keys(positions[strat.id]).length >= strat.MAX_OPEN) return;
   positions[strat.id][mint] = { status: 'buying' };
@@ -699,7 +798,7 @@ async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
       + '📊 https://dexscreener.com/solana/' + mint,
       true
     );
-    monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd);
+    monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd, meta);
     return;
   }
 
@@ -746,7 +845,7 @@ async function snipe(mint, name, entryMC, strat, miseLamports, miseUsd, score) {
         + '📊 https://dexscreener.com/solana/' + mint,
         true
       );
-      monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd);
+      monitorSnipe(mint, name, entryMC, buyTime, strat, effectiveUsd, meta);
       break;
     } catch(e) {
       console.log('Tentative ' + i + ' : ' + e.message);
@@ -772,7 +871,8 @@ async function checkWatchlist(strat) {
         delete watchlist[strat.id][mint];
         if (Object.keys(positions[strat.id]).length < strat.MAX_OPEN) {
           console.log('[ENTRY/' + strat.id.toUpperCase() + '] ' + info.name + ' → ACHAT $' + mc.toLocaleString());
-          await snipe(mint, info.name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0);
+          const coinMeta = { holders: coin.holder_count || 0, replies: coin.reply_count || 0, ageSec: 0, hour: new Date().getHours() };
+          await snipe(mint, info.name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0, coinMeta);
         }
       }
     } catch(e) {}
@@ -856,7 +956,8 @@ async function scanPumpFun(strat) {
         console.log('[CONFIRM/' + strat.id.toUpperCase() + '] ' + name + ' — MC stable $' + freshMC.toLocaleString() + ' OK');
       }
 
-      await snipe(coin.mint, name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0);
+      const coinMeta = { holders: coin.holder_count || 0, replies: coin.reply_count || 0, ageSec: Math.round(ageSec), hour: new Date().getHours() };
+      await snipe(coin.mint, name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0, coinMeta);
       break;
     }
 
