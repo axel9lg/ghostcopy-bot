@@ -35,7 +35,7 @@ let tradingPaused = false;
 
 // GESTION DE CAPITAL
 const CAPITAL_FILE    = './capital.json';
-const STARTING_CAPITAL = 900;
+const STARTING_CAPITAL = 500;
 const RISK_PCT        = 0.10; // 10% du capital par trade
 let capital = STARTING_CAPITAL;
 try {
@@ -54,9 +54,9 @@ const SOL_PRICE        = parseFloat(process.env.SOL_PRICE || '170');
 const JITO_FEE         = 500000;
 const JITO_TIP         = 1000000;
 const MONITOR_INTERVAL = 1000;
-const MIN_AGE_SEC      = 10;
-const MAX_AGE_SEC      = 600;
-const MAX_LAST_TRADE_SEC = 120;
+const MIN_AGE_SEC      = 30;   // token doit avoir au moins 30s d existence
+const MAX_AGE_SEC      = 300;  // pas plus de 5 min (apres c est mort)
+const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 
 // ─── STRATEGIES ──────────────────────────────────────────────────────────────
 const STRATEGIES = [
@@ -64,13 +64,14 @@ const STRATEGIES = [
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
     MISE_LAMPORTS: 588235000, MISE_USD: 100,
     TP_LEVELS: [50, 100, 200],
-    SL_PCT: 50,    // utilise si SL_MC absent
-    SL_MC: 3000,   // sortie fixe a $3000 MC quel que soit le prix d entree
+    SL_PCT: 50,
+    SL_MC: 3000,
     MIN_MC: 5500, MAX_MC: 7000, WATCH_MIN_MC: 4000,
-    MIN_HOLDERS: 5, MAX_OPEN: 3,
-    MAX_HOLD_MS: 20 * 60 * 1000, SCAN_INTERVAL: 3000,
-    MIN_REPLY: 0,
+    MIN_HOLDERS: 15, MAX_OPEN: 2,
+    MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 3000,
+    MIN_REPLY: 2,
     TRAIL_ACTIVATION_PCT: 50, TRAIL_PCT: 20,
+    CONFIRM_SEC: 5, // attendre 5s avant achat pour confirmer la tendance
   },
 ];
 
@@ -1150,11 +1151,20 @@ async function scanPumpFun(strat) {
         st.skipped++; continue;
       }
 
-      if (strat.mode === 'dca') {
-        await dcaSnipe(coin.mint, name, mc, strat);
-      } else {
-        await snipe(coin.mint, name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0);
+      // Confirmation : attendre CONFIRM_SEC secondes et re-verifier que le MC tient
+      if (strat.CONFIRM_SEC) {
+        await new Promise(r => setTimeout(r, strat.CONFIRM_SEC * 1000));
+        if (sniped.has(coin.mint) || STRATEGIES.some(s => positions[s.id][coin.mint])) continue;
+        const fresh = await getPumpCoin(coin.mint);
+        const freshMC = fresh ? Math.round(fresh.usd_market_cap || 0) : 0;
+        if (!freshMC || freshMC < strat.MIN_MC || freshMC > strat.MAX_MC * 1.3) {
+          console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — confirmation echouee ($' + freshMC.toLocaleString() + ')');
+          st.skipped++; continue;
+        }
+        console.log('[CONFIRM/' + strat.id.toUpperCase() + '] ' + name + ' — MC stable $' + freshMC.toLocaleString() + ' OK');
       }
+
+      await snipe(coin.mint, name, mc, strat, strat.MISE_LAMPORTS, strat.MISE_USD, 0);
       break;
     }
 
