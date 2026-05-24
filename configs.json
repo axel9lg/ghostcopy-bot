@@ -25,7 +25,7 @@
     "MIN_REPLY": 3,
     "CONFIRM_SEC": 5,
     "GRADUATED_ONLY": false,
-    "note": "Momentum +3% requis | HOLDERS 30 | REPLY 3 — fix 54% dumps de v1 → 178 trades, 35% WR, -$1169"
+    "note": "Momentum +3% requis | HOLDERS 30 | REPLY 3 — 178 trades, 35% WR, -$1169"
   },
   {
     "id": "v3",
@@ -39,6 +39,20 @@
     "MIN_REPLY": 3,
     "CONFIRM_SEC": 8,
     "GRADUATED_ONLY": false,
-    "note": "Momentum +5% requis | HOLDERS 35 | CONFIRM 8s — fix 46% dumps de v2"
+    "note": "Momentum +5% requis | HOLDERS 35 | CONFIRM 8s — 160 trades, 24% WR, -$3947 (momentum = PIRE)"
+  },
+  {
+    "id": "v4",
+    "savedAt": "2026-05-25",
+    "MIN_MC": 9000,
+    "MAX_MC": 11000,
+    "TP_LEVELS": [20, 50, 100],
+    "SL_PCT": 20,
+    "MISE_USD": 300,
+    "MIN_HOLDERS": 20,
+    "MIN_REPLY": 2,
+    "CONFIRM_SEC": 5,
+    "GRADUATED_ONLY": false,
+    "note": "Retour reglages v1 (seule config rentable) — filtre momentum supprime"
   }
 ]
