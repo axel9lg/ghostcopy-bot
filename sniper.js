@@ -35,19 +35,19 @@ const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
-    configId: 'v2', // incremente a chaque changement de reglages : v1, v2, v3...
+    configId: 'v3', // incremente a chaque changement de reglages : v1, v2, v3...
     MISE_LAMPORTS: 1764706000, MISE_USD: 300,
     TP_LEVELS: [20, 50, 100],
     SL_PCT: 20,
     SL_MC: 0,
     MIN_MC: 9000, MAX_MC: 11000, WATCH_MIN_MC: 7000,
-    MIN_HOLDERS: 30, MAX_OPEN: 2,
+    MIN_HOLDERS: 35, MAX_OPEN: 2,
     MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 3000,
     MIN_REPLY: 3,
     REQUIRE_TWITTER: false,
     GRADUATED_ONLY: false,
     TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
-    CONFIRM_SEC: 5,
+    CONFIRM_SEC: 8,
   },
 ];
 
@@ -1022,8 +1022,8 @@ async function scanPumpFun(strat) {
           console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — confirmation echouee ($' + freshMC.toLocaleString() + ')');
           st.skipped++; continue;
         }
-        // Filtre momentum : on n achete que si le MC monte activement (+3% minimum)
-        if (freshMC < mcAtDetection * 1.03) {
+        // Filtre momentum : on n achete que si le MC monte activement (+5% minimum)
+        if (freshMC < mcAtDetection * 1.05) {
           console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — momentum insuffisant ($' + mcAtDetection.toLocaleString() + ' → $' + freshMC.toLocaleString() + ')');
           st.skipped++; continue;
         }
