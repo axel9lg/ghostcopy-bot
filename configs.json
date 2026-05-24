@@ -12,5 +12,19 @@
     "CONFIRM_SEC": 5,
     "GRADUATED_ONLY": false,
     "note": "Config de base — entree $9500 | TP +20/+50/+100% | SL -20% | CONFIRME RENTABLE : 89 trades, 42% WR, +$489"
+  },
+  {
+    "id": "v2",
+    "savedAt": "2026-05-24",
+    "MIN_MC": 9000,
+    "MAX_MC": 11000,
+    "TP_LEVELS": [20, 50, 100],
+    "SL_PCT": 20,
+    "MISE_USD": 300,
+    "MIN_HOLDERS": 30,
+    "MIN_REPLY": 3,
+    "CONFIRM_SEC": 5,
+    "GRADUATED_ONLY": false,
+    "note": "Momentum +3% requis | HOLDERS 30 | REPLY 3 — fix 54% dumps de v1"
   }
 ]
