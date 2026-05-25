@@ -53,6 +53,21 @@
     "MIN_REPLY": 2,
     "CONFIRM_SEC": 5,
     "GRADUATED_ONLY": false,
-    "note": "Retour reglages v1 (seule config rentable) — filtre momentum supprime"
+    "note": "Retour reglages v1 — filtre momentum supprime — 492 trades, 28% WR, -$9112"
+  },
+  {
+    "id": "v5",
+    "savedAt": "2026-05-25",
+    "MIN_MC": 9000,
+    "MAX_MC": 11000,
+    "TP_LEVELS": [20, 50, 100],
+    "SL_PCT": 20,
+    "MISE_USD": 300,
+    "MIN_HOLDERS": 20,
+    "MIN_REPLY": 2,
+    "CONFIRM_SEC": 5,
+    "GRADUATED_ONLY": false,
+    "TRADE_HOURS": "9-11h et 15-17h",
+    "note": "Filtre horaire : 9h-11h et 15h-17h uniquement (seules heures rentables du bilan)"
   }
 ]

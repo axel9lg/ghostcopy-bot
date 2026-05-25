@@ -35,7 +35,7 @@ const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
-    configId: 'v4', // incremente a chaque changement de reglages : v1, v2, v3...
+    configId: 'v5', // incremente a chaque changement de reglages : v1, v2, v3...
     MISE_LAMPORTS: 1764706000, MISE_USD: 300,
     TP_LEVELS: [20, 50, 100],
     SL_PCT: 20,
@@ -943,6 +943,14 @@ async function checkWatchlist(strat) {
 // ─── SCAN ─────────────────────────────────────────────────────────────────────
 async function scanPumpFun(strat) {
   try {
+    // Filtre horaire : ne trader que pendant les heures rentables (9h-11h et 15h-17h)
+    const hour = new Date().getHours();
+    const goodHour = (hour >= 9 && hour <= 11) || (hour >= 15 && hour <= 17);
+    if (!goodHour) {
+      console.log('[PAUSE/' + strat.id.toUpperCase() + '] Hors heures rentables (' + hour + 'h) — prochaine fenetre : 9h-11h ou 15h-17h');
+      return;
+    }
+
     const tokens = await getTokenCache();
     if (!tokens || tokens.length === 0) {
       console.log('[SCAN/' + strat.id.toUpperCase() + '] API injoignable — retry');
