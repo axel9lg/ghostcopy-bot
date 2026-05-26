@@ -19,48 +19,70 @@ const HEADERS = {
 
 // ─── CONFIGS A COMPARER ───────────────────────────────────────────────────────
 // pattern : direct | pullback | hammer | breakout | trend_up
+//           higher_low | consolidation | ema_cross | support_bounce  (swing)
 const CONFIGS = [
-  // ── Zone $9k-$11k (ancienne zone) ──
+  // ── SCALPING : Zone $9k-$11k ──
   {
-    id: 'A_DIRECT',   label: '$9k-$11k  entree directe       ',
-    entry: 9000, maxE: 11000, tpLevels: [20, 50, 100], sl: 20, maxMin: 15,
+    id: 'A_DIRECT',    label: '$9k-$11k   entree directe (baseline)',
+    entry: 9000,  maxE: 11000,  tpLevels: [20, 50, 100],  sl: 20, maxMin: 15,
     pattern: 'direct',
   },
   {
-    id: 'B_PULLBACK',  label: '$9k-$11k  pullback -5% + rebond',
-    entry: 9000, maxE: 11000, tpLevels: [20, 50, 100], sl: 20, maxMin: 15,
+    id: 'B_PULLBACK',  label: '$9k-$11k   pullback -5% + rebond    ',
+    entry: 9000,  maxE: 11000,  tpLevels: [20, 50, 100],  sl: 20, maxMin: 15,
     pattern: 'pullback', pullbackPct: 5,
   },
   {
-    id: 'C_HAMMER',   label: '$9k-$11k  bougie hammer        ',
-    entry: 9000, maxE: 11000, tpLevels: [20, 50, 100], sl: 20, maxMin: 15,
+    id: 'C_HAMMER',    label: '$9k-$11k   bougie hammer             ',
+    entry: 9000,  maxE: 11000,  tpLevels: [20, 50, 100],  sl: 20, maxMin: 15,
     pattern: 'hammer',
   },
   {
-    id: 'D_BREAKOUT', label: '$9k-$11k  breakout 3 bougies   ',
-    entry: 9000, maxE: 11000, tpLevels: [20, 50, 100], sl: 20, maxMin: 15,
+    id: 'D_BREAKOUT',  label: '$9k-$11k   breakout 3 bougies        ',
+    entry: 9000,  maxE: 11000,  tpLevels: [20, 50, 100],  sl: 20, maxMin: 15,
     pattern: 'breakout',
   },
   {
-    id: 'E_TREND',    label: '$9k-$11k  2 bougies vertes      ',
-    entry: 9000, maxE: 11000, tpLevels: [20, 50, 100], sl: 20, maxMin: 15,
+    id: 'E_TREND',     label: '$9k-$11k   2 bougies vertes           ',
+    entry: 9000,  maxE: 11000,  tpLevels: [20, 50, 100],  sl: 20, maxMin: 15,
     pattern: 'trend_up',
   },
-  // ── Zone $15k-$60k (zone mature v6) ──
+  // ── SCALPING : Zone mature $15k-$60k ──
   {
-    id: 'F_MAT_DIR',  label: '$15k-$60k entree directe       ',
-    entry: 15000, maxE: 60000, tpLevels: [30, 60, 120], sl: 15, maxMin: 20,
+    id: 'F_MAT_DIR',   label: '$15k-$60k  entree directe             ',
+    entry: 15000, maxE: 60000,  tpLevels: [30, 60, 120],  sl: 15, maxMin: 20,
     pattern: 'direct',
   },
   {
-    id: 'G_MAT_PULL', label: '$15k-$60k pullback -8% + rebond',
-    entry: 15000, maxE: 60000, tpLevels: [30, 60, 120], sl: 15, maxMin: 20,
+    id: 'G_MAT_PULL',  label: '$15k-$60k  pullback -8% + rebond      ',
+    entry: 15000, maxE: 60000,  tpLevels: [30, 60, 120],  sl: 15, maxMin: 20,
     pattern: 'pullback', pullbackPct: 8,
   },
   {
-    id: 'H_MAT_BRK',  label: '$15k-$60k breakout 3 bougies   ',
-    entry: 15000, maxE: 60000, tpLevels: [30, 60, 120], sl: 15, maxMin: 20,
+    id: 'H_MAT_BRK',   label: '$15k-$60k  breakout 3 bougies         ',
+    entry: 15000, maxE: 60000,  tpLevels: [30, 60, 120],  sl: 15, maxMin: 20,
     pattern: 'breakout',
+  },
+  // ── SWING TRADING : hold 30-60 min, TP larges ──
+  {
+    id: 'I_SW_HIGHERLOW', label: 'SWING   higher lows consecutifs    ',
+    entry: 9000,  maxE: 60000,  tpLevels: [50, 100, 200], sl: 20, maxMin: 60,
+    pattern: 'higher_low',
+  },
+  {
+    id: 'J_SW_CONSOL',    label: 'SWING   consolidation breakout      ',
+    entry: 9000,  maxE: 60000,  tpLevels: [50, 100, 200], sl: 20, maxMin: 60,
+    pattern: 'consolidation',
+  },
+  {
+    id: 'K_SW_EMA',       label: 'SWING   EMA3 > EMA8 (crossover)    ',
+    entry: 9000,  maxE: 60000,  tpLevels: [50, 100, 200], sl: 20, maxMin: 60,
+    pattern: 'ema_cross',
+  },
+  {
+    id: 'L_SW_SUPPORT',   label: 'SWING   rebond sur support          ',
+    entry: 9000,  maxE: 60000,  tpLevels: [50, 100, 200], sl: 20, maxMin: 60,
+    pattern: 'support_bounce',
   },
 ];
 
@@ -209,6 +231,91 @@ function findEntry(candles, cfg) {
     return null;
   }
 
+  // ── SWING PATTERNS ────────────────────────────────────────────────────────
+
+  if (pattern === 'higher_low') {
+    // Structure : bas1 < bas2 < bas3 (series de bas croissants = uptrend)
+    // Entrer quand le 3eme higher low est confirme et le prix remonte
+    let inZone = false;
+    for (let i = 4; i < candles.length - 2; i++) {
+      const c = candles[i];
+      if (!inZone && c.close >= entry) inZone = true;
+      if (!inZone) continue;
+      const low1 = candles[i - 4].low;
+      const low2 = candles[i - 2].low;
+      const low3 = candles[i].low;
+      // Chaque bas plus haut que le precedent
+      if (low2 > low1 && low3 > low2 && c.close > c.open && c.close >= entry) {
+        return { idx: i, price: c.close };
+      }
+    }
+    return null;
+  }
+
+  if (pattern === 'consolidation') {
+    // 4 bougies dans un range etroit (< 6% de variation), puis breakout au-dessus
+    let inZone = false;
+    for (let i = 4; i < candles.length - 2; i++) {
+      const c = candles[i];
+      if (!inZone && c.close >= entry) inZone = true;
+      if (!inZone) continue;
+      const window    = candles.slice(i - 3, i);
+      const rangeHigh = Math.max(...window.map(x => x.high));
+      const rangeLow  = Math.min(...window.map(x => x.low));
+      const rangeRatio = (rangeHigh - rangeLow) / rangeLow;
+      // Range < 6% = consolidation, puis breakout au-dessus
+      if (rangeRatio < 0.06 && c.close > rangeHigh && c.close >= entry) {
+        return { idx: i, price: c.close };
+      }
+    }
+    return null;
+  }
+
+  if (pattern === 'ema_cross') {
+    // EMA3 croise au-dessus de EMA8 pendant que le prix est dans la zone
+    // Calcul de l EMA glissante au fil des bougies
+    const k3 = 2 / (3 + 1);
+    const k8 = 2 / (8 + 1);
+    let ema3 = candles[0].close;
+    let ema8 = candles[0].close;
+    let prevEma3 = ema3, prevEma8 = ema8;
+    let inZone = false;
+    for (let i = 1; i < candles.length - 2; i++) {
+      const c = candles[i];
+      prevEma3 = ema3; prevEma8 = ema8;
+      ema3 = c.close * k3 + ema3 * (1 - k3);
+      ema8 = c.close * k8 + ema8 * (1 - k8);
+      if (!inZone && c.close >= entry) inZone = true;
+      if (!inZone) continue;
+      // Croisement : EMA3 passe au-dessus de EMA8
+      if (prevEma3 <= prevEma8 && ema3 > ema8 && c.close >= entry) {
+        return { idx: i, price: c.close };
+      }
+    }
+    return null;
+  }
+
+  if (pattern === 'support_bounce') {
+    // Token etablit un plus bas, remonte, reteste ce plus bas, rebondit → entrer
+    let inZone    = false;
+    let support   = null;
+    let aboveSupport = false;
+    for (let i = 3; i < candles.length - 2; i++) {
+      const c = candles[i];
+      if (!inZone && c.close >= entry) { inZone = true; support = c.low; }
+      if (!inZone) continue;
+      // Mettre a jour le support si nouveau plus bas
+      if (c.low < support) { support = c.low; aboveSupport = false; }
+      // Detecter quand le prix monte bien au-dessus du support (confirmation)
+      if (c.close > support * 1.08) aboveSupport = true;
+      // Rebond sur le support : prix retombe pres du support puis repart
+      if (aboveSupport && c.low <= support * 1.04 && c.close > support * 1.06 && c.close >= entry) {
+        return { idx: i, price: c.close };
+      }
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -264,26 +371,33 @@ function simulateTrade(candles, cfg) {
 function printResults(results) {
   console.log('\n');
   console.log('══════════════════════════════════════════════════════════════════════════════');
-  console.log('                     RESULTATS BACKTEST — PATTERNS D ENTREE');
+  console.log('              RESULTATS BACKTEST — SCALPING vs SWING TRADING');
   console.log('══════════════════════════════════════════════════════════════════════════════');
 
-  const sorted = [...results].sort((a, b) => b.ev - a.ev);
-  let rank = 1;
-  for (const r of sorted) {
-    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : ` ${rank} `;
-    const evSign = r.ev >= 0 ? '+' : '';
-    const netSign = r.net >= 0 ? '+' : '';
-    console.log(`\n${medal} [${r.id}] ${r.label}`);
-    console.log(`     Trades : ${r.trades} | WR : ${r.winRate}% | Timeouts : ${r.timeouts}`);
-    console.log(`     EV/trade : ${evSign}$${r.ev.toFixed(2)} | NET : ${netSign}$${r.net.toFixed(0)} | Avg win : +$${r.avgWin.toFixed(0)} | Avg loss : -$${r.avgLoss.toFixed(0)}`);
-    rank++;
-  }
+  const swingIds = ['I_SW_HIGHERLOW', 'J_SW_CONSOL', 'K_SW_EMA', 'L_SW_SUPPORT'];
+  const scalping = results.filter(r => !swingIds.includes(r.id)).sort((a, b) => b.ev - a.ev);
+  const swing    = results.filter(r =>  swingIds.includes(r.id)).sort((a, b) => b.ev - a.ev);
 
+  const printGroup = (group, title) => {
+    console.log(`\n── ${title} ──`);
+    let rank = 1;
+    for (const r of group) {
+      const medal  = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : ` ${rank} `;
+      const evSign = r.ev >= 0 ? '+' : '';
+      console.log(`${medal} [${r.id}] ${r.label}`);
+      console.log(`     ${r.trades} trades | WR ${r.winRate}% | EV ${evSign}$${r.ev.toFixed(2)}/t | NET ${r.net >= 0 ? '+' : ''}$${r.net.toFixed(0)} | win +$${r.avgWin.toFixed(0)} | loss -$${r.avgLoss.toFixed(0)}`);
+      rank++;
+    }
+  };
+
+  printGroup(scalping, 'SCALPING (5-20 min)');
+  printGroup(swing,    'SWING TRADING (30-60 min)');
+
+  const allSorted  = [...results].sort((a, b) => b.ev - a.ev);
+  const overall    = allSorted[0];
   console.log('\n══════════════════════════════════════════════════════════════════════════════');
-  const best = sorted[0];
-  const bestSign = best.ev >= 0 ? '+' : '';
-  console.log(`\n✅ MEILLEUR PATTERN : [${best.id}] ${best.label.trim()}`);
-  console.log(`   EV : ${bestSign}$${best.ev.toFixed(2)}/trade | WR : ${best.winRate}% | NET : ${best.net >= 0 ? '+' : ''}$${best.net.toFixed(0)}`);
+  console.log(`\n🏆 MEILLEUR TOUTES CATEGORIES : [${overall.id}] ${overall.label.trim()}`);
+  console.log(`   EV : ${overall.ev >= 0 ? '+' : ''}$${overall.ev.toFixed(2)}/trade | WR : ${overall.winRate}% | NET : ${overall.net >= 0 ? '+' : ''}$${overall.net.toFixed(0)}`);
   console.log('══════════════════════════════════════════════════════════════════════════════\n');
 }
 
