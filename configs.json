@@ -1,54 +1,50 @@
 [
   {
-    "id": "v1",
-    "savedAt": "2026-05-23",
-    "MIN_MC": 9000, "MAX_MC": 11000,
-    "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
+    "id": "v1", "savedAt": "2026-05-23",
+    "MIN_MC": 9000, "MAX_MC": 11000, "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
     "MISE_USD": 300, "MIN_HOLDERS": 20, "MIN_REPLY": 2, "CONFIRM_SEC": 5,
     "note": "Config de base — 89 trades, 42% WR, +$489 (seule config rentable)"
   },
   {
-    "id": "v2",
-    "savedAt": "2026-05-24",
-    "MIN_MC": 9000, "MAX_MC": 11000,
-    "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
+    "id": "v2", "savedAt": "2026-05-24",
+    "MIN_MC": 9000, "MAX_MC": 11000, "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
     "MISE_USD": 300, "MIN_HOLDERS": 30, "MIN_REPLY": 3, "CONFIRM_SEC": 5,
     "note": "Momentum +3% requis — 178 trades, 35% WR, -$1169"
   },
   {
-    "id": "v3",
-    "savedAt": "2026-05-24",
-    "MIN_MC": 9000, "MAX_MC": 11000,
-    "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
+    "id": "v3", "savedAt": "2026-05-24",
+    "MIN_MC": 9000, "MAX_MC": 11000, "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
     "MISE_USD": 300, "MIN_HOLDERS": 35, "MIN_REPLY": 3, "CONFIRM_SEC": 8,
     "note": "Momentum +5% requis — 160 trades, 24% WR, -$3947 (momentum = PIRE)"
   },
   {
-    "id": "v4",
-    "savedAt": "2026-05-25",
-    "MIN_MC": 9000, "MAX_MC": 11000,
-    "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
+    "id": "v4", "savedAt": "2026-05-25",
+    "MIN_MC": 9000, "MAX_MC": 11000, "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
     "MISE_USD": 300, "MIN_HOLDERS": 20, "MIN_REPLY": 2, "CONFIRM_SEC": 5,
     "note": "Retour v1 sans filtre momentum — 492 trades, 28% WR, -$9112"
   },
   {
-    "id": "v5",
-    "savedAt": "2026-05-25",
-    "MIN_MC": 9000, "MAX_MC": 11000,
-    "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
+    "id": "v5", "savedAt": "2026-05-25",
+    "MIN_MC": 9000, "MAX_MC": 11000, "TP_LEVELS": [20, 50, 100], "SL_PCT": 20,
     "MISE_USD": 300, "MIN_HOLDERS": 20, "MIN_REPLY": 2, "CONFIRM_SEC": 5,
     "TRADE_HOURS": "9-11h et 15-17h",
     "note": "Filtre horaire 9h-11h et 15h-17h uniquement"
   },
   {
-    "id": "v6",
-    "savedAt": "2026-05-26",
-    "MIN_MC": 15000, "MAX_MC": 60000,
-    "TP_LEVELS": [30, 60, 120], "SL_PCT": 15,
+    "id": "v6", "savedAt": "2026-05-26",
+    "MIN_MC": 15000, "MAX_MC": 60000, "TP_LEVELS": [30, 60, 120], "SL_PCT": 15,
     "MISE_USD": 300, "MIN_HOLDERS": 30, "MIN_REPLY": 2, "CONFIRM_SEC": 0,
     "MAX_AGE_SEC": 1200,
     "MIN_TREND_M5": 5, "MIN_BUY_RATIO": 1.2, "MIN_VOL_M5": 1000,
     "TRADE_HOURS": "9-11h et 15-17h",
-    "note": "Tokens matures $15k-$60k | timeframe 5min DexScreener : +5% trend, 55% buys, vol $1k"
+    "note": "Tokens matures $15k-$60k | trend 5min DexScreener | filtre horaire"
+  },
+  {
+    "id": "v7", "savedAt": "2026-05-26",
+    "MIN_MC": 15000, "MAX_MC": 60000, "TP_LEVELS": [30, 60, 120], "SL_PCT": 15,
+    "MISE_USD": 300, "MIN_HOLDERS": 30, "MIN_REPLY": 2, "CONFIRM_SEC": 0,
+    "MAX_AGE_SEC": 1200,
+    "MIN_TREND_M5": 5, "MIN_BUY_RATIO": 1.2, "MIN_VOL_M5": 1000,
+    "note": "v6 sans filtre horaire — bot 24/7 | auto-analyse quotidienne | /backtest commande"
   }
 ]

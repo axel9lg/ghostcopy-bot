@@ -4,6 +4,7 @@ const bs58 = require('bs58');
 const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 const http = require('http');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const server = http.createServer((req, res) => { res.writeHead(200); res.end('SNIPER OK'); });
 server.listen(3001);
@@ -35,7 +36,7 @@ const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
-    configId: 'v6', // incremente a chaque changement de reglages : v1, v2, v3...
+    configId: 'v7', // incremente a chaque changement de reglages : v1, v2, v3...
     MISE_LAMPORTS: 1764706000, MISE_USD: 300,
     TP_LEVELS: [30, 60, 120],
     SL_PCT: 15,
@@ -240,7 +241,7 @@ async function pollTelegram() {
         }
       } else if (cmd === '/aide') {
         let helpMsg = '🤖 COMMANDES\n==================\n/start — Accueil\n/trial — Essai gratuit 7 jours\n/payer — Acces premium\n/statut — Mon acces\n/bilan — Performance du bot\n/aide — Cette liste';
-        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/bilan — Rapport complet\n/analyse — Analyse des performances\n/positions — Positions ouvertes\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces';
+        if (isAdmin) helpMsg += '\n==================\n👑 ADMIN\n/bilan — Rapport complet\n/analyse — Analyse des performances\n/backtest — Lance le backtest (résultats via Telegram)\n/positions — Positions ouvertes\n/users — Abonnes\n/activer [id] — Acces illimite\n/trial [id] [n] — Donner N snipes\n/desactiver [id] — Couper acces';
         await sendTo(chatId, helpMsg);
 
       } else if (isAdmin) {
@@ -248,6 +249,8 @@ async function pollTelegram() {
           await sendSniperReport();
         } else if (cmd === '/analyse') {
           await sendAnalyse();
+        } else if (cmd === '/backtest') {
+          runBacktest(); // pas de await — tourne en fond
         } else if (cmd === '/positions') {
           let posMsg = '📊 POSITIONS OUVERTES\n==================\n';
           let totalOpen = 0;
@@ -577,6 +580,37 @@ async function sendAnalyse() {
   if (wr >= 40 && parseFloat(ev) > 0) msg += '• Config rentable ! Continuer ainsi\n';
 
   await sendTelegram(msg);
+}
+
+// ─── BACKTEST AUTOMATIQUE ─────────────────────────────────────────────────────
+async function runBacktest() {
+  await sendTelegram('🔬 Backtest lance en fond...\nResultats dans 1-15 min (cache si dispo, sinon telecharge 500 tokens).');
+  return new Promise((resolve) => {
+    const args = [__dirname + '/backtest.js'];
+    if (fs.existsSync(__dirname + '/backtest_cache.json')) args.push('--cached');
+    const proc = spawn('node', args, { cwd: __dirname });
+    let output = '';
+    proc.stdout.on('data', d => { output += d.toString(); });
+    proc.stderr.on('data', d => { output += d.toString(); });
+    proc.on('close', async () => {
+      try {
+        const lines = output.split('\n');
+        const start = lines.findIndex(l => l.includes('RESULTATS BACKTEST'));
+        if (start >= 0) {
+          let result = lines.slice(start).join('\n').replace(/[^\x20-\x7E\n]/g, '').trim();
+          if (result.length > 3800) result = result.slice(0, 3800) + '\n...(tronque)';
+          await sendTelegram('📊 BACKTEST TERMINE\n==================\n' + result);
+        } else {
+          await sendTelegram('🔬 Backtest termine — aucun resultat trouve.\n' + output.slice(0, 400));
+        }
+      } catch(e) { await sendTelegram('❌ Erreur backtest : ' + e.message); }
+      resolve();
+    });
+    proc.on('error', async err => {
+      await sendTelegram('❌ Impossible de lancer backtest : ' + err.message);
+      resolve();
+    });
+  });
 }
 
 // ─── RAPPORT ──────────────────────────────────────────────────────────────────
@@ -947,14 +981,6 @@ async function checkWatchlist(strat) {
 // ─── SCAN ─────────────────────────────────────────────────────────────────────
 async function scanPumpFun(strat) {
   try {
-    // Filtre horaire : ne trader que pendant les heures rentables (9h-11h et 15h-17h)
-    const hour = new Date().getHours();
-    const goodHour = (hour >= 9 && hour <= 11) || (hour >= 15 && hour <= 17);
-    if (!goodHour) {
-      console.log('[PAUSE/' + strat.id.toUpperCase() + '] Hors heures rentables (' + hour + 'h) — prochaine fenetre : 9h-11h ou 15h-17h');
-      return;
-    }
-
     const tokens = await getTokenCache();
     if (!tokens || tokens.length === 0) {
       console.log('[SCAN/' + strat.id.toUpperCase() + '] API injoignable — retry');
@@ -1158,6 +1184,13 @@ async function startSniper() {
     }
   }
   setInterval(() => pollTelegram(), 3000);
+
+  // Auto-analyse toutes les 24h
+  setInterval(async () => {
+    const h = new Date().getHours();
+    await sendTelegram('🌙 AUTO-ANALYSE QUOTIDIENNE (' + new Date().toLocaleDateString('fr-FR') + ')');
+    await sendAnalyse();
+  }, 24 * 60 * 60 * 1000);
 }
 
 startSniper();
