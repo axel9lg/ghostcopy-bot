@@ -35,19 +35,23 @@ const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
-    configId: 'v5', // incremente a chaque changement de reglages : v1, v2, v3...
+    configId: 'v6', // incremente a chaque changement de reglages : v1, v2, v3...
     MISE_LAMPORTS: 1764706000, MISE_USD: 300,
-    TP_LEVELS: [20, 50, 100],
-    SL_PCT: 20,
+    TP_LEVELS: [30, 60, 120],
+    SL_PCT: 15,
     SL_MC: 0,
-    MIN_MC: 9000, MAX_MC: 11000, WATCH_MIN_MC: 7000,
-    MIN_HOLDERS: 20, MAX_OPEN: 2,
-    MAX_HOLD_MS: 15 * 60 * 1000, SCAN_INTERVAL: 3000,
+    MIN_MC: 15000, MAX_MC: 60000, WATCH_MIN_MC: 10000,
+    MIN_HOLDERS: 30, MAX_OPEN: 2,
+    MAX_HOLD_MS: 20 * 60 * 1000, SCAN_INTERVAL: 3000,
+    MAX_AGE_SEC: 1200,
     MIN_REPLY: 2,
     REQUIRE_TWITTER: false,
     GRADUATED_ONLY: false,
-    TRAIL_ACTIVATION_PCT: 20, TRAIL_PCT: 10,
-    CONFIRM_SEC: 5,
+    TRAIL_ACTIVATION_PCT: 25, TRAIL_PCT: 12,
+    CONFIRM_SEC: 0,
+    MIN_TREND_M5: 5,
+    MIN_BUY_RATIO: 1.2,
+    MIN_VOL_M5: 1000,
   },
 ];
 
@@ -980,7 +984,7 @@ async function scanPumpFun(strat) {
       } else {
         // Mode bonding curve : tokens frais non gradues
         if (ageSec < MIN_AGE_SEC)  { tooYoung++; continue; }
-        if (ageSec > MAX_AGE_SEC)  { tooOld++;   continue; }
+        if (ageSec > (strat.MAX_AGE_SEC || MAX_AGE_SEC)) { tooOld++; continue; }
         if (coin.complete)         continue;
       }
       if (lastTradeSec > MAX_LAST_TRADE_SEC && lastTradeRaw > 0) { inactive++;  continue; }
@@ -1002,6 +1006,29 @@ async function scanPumpFun(strat) {
       if (rugNames.has(name.toLowerCase()))                                                         { st.skipped++; continue; }
       if (rugDevs.has(coin.creator))                                                                { st.skipped++; continue; }
       if (coin.twitter && rugTwitters.has((coin.twitter || '').toLowerCase()))                      { st.skipped++; continue; }
+
+      // Filtre timeframe DexScreener : tendance 5min confirmee avant d entrer
+      if (strat.MIN_TREND_M5 || strat.MIN_BUY_RATIO || strat.MIN_VOL_M5) {
+        const pair = await getDexPair(coin.mint);
+        if (!pair) { st.skipped++; continue; }
+        const priceM5 = pair.priceChange?.m5 || 0;
+        const buysM5  = pair.txns?.m5?.buys  || 0;
+        const sellsM5 = pair.txns?.m5?.sells || 0;
+        const volM5   = pair.volume?.m5      || 0;
+        if (strat.MIN_TREND_M5 && priceM5 < strat.MIN_TREND_M5) {
+          console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — trend 5min faible (' + priceM5.toFixed(1) + '%)');
+          st.skipped++; continue;
+        }
+        if (strat.MIN_BUY_RATIO && buysM5 > 0 && buysM5 < sellsM5 * strat.MIN_BUY_RATIO) {
+          console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — pression achat faible (' + buysM5 + 'B / ' + sellsM5 + 'S)');
+          st.skipped++; continue;
+        }
+        if (strat.MIN_VOL_M5 && volM5 < strat.MIN_VOL_M5) {
+          console.log('[SKIP/' + strat.id.toUpperCase() + '] ' + name + ' — vol 5min faible ($' + Math.round(volM5) + ')');
+          st.skipped++; continue;
+        }
+        console.log('[TREND/' + strat.id.toUpperCase() + '] ' + name + ' — 5min +' + priceM5.toFixed(1) + '% | ' + buysM5 + 'B/' + sellsM5 + 'S | vol $' + Math.round(volM5));
+      }
 
       candidates++;
       console.log('[' + strat.id.toUpperCase() + '] CANDIDAT ' + name + ' | $' + mc.toLocaleString() + ' | age ' + Math.round(ageSec) + 's');
