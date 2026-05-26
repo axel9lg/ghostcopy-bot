@@ -36,11 +36,11 @@ const MAX_LAST_TRADE_SEC = 60; // trade recent < 60s (token actif)
 const STRATEGIES = [
   {
     id: 'sniper', emoji: '🎯', name: 'SNIPER',
-    configId: 'v7', // incremente a chaque changement de reglages : v1, v2, v3...
+    configId: 'v8', // incremente a chaque changement de reglages : v1, v2, v3...
     MISE_LAMPORTS: 1764706000, MISE_USD: 300,
     TP_LEVELS: [30, 60, 120],
     SL_PCT: 15,
-    SL_MC: 0,
+    SL_MC: 5000,
     MIN_MC: 15000, MAX_MC: 60000, WATCH_MIN_MC: 10000,
     MIN_HOLDERS: 30, MAX_OPEN: 2,
     MAX_HOLD_MS: 20 * 60 * 1000, SCAN_INTERVAL: 3000,
